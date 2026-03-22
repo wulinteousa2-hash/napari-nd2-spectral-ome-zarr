@@ -1,6 +1,17 @@
 # napari-nd2-spectral-ome-zarr
 
-napari plugin for Nikon ND2 spectral imaging workflows with emphasis on 2D spectral cubes.
+This napari plugin supports spectral fluorescence imaging workflows for
+solvatochromic dye analysis (e.g., Nile Red) across the visible emission
+range (~400–740 nm). It provides ND2-to-OME-Zarr conversion, ROI-based
+spectral extraction, emission-ratio analysis, and aggregation from ROI
+to image-level and animal-level datasets.
+
+## Supported microscopy systems
+
+Tested with spectral ND2 datasets generated from:
+
+- Nikon A1 spectral detector systems
+- Nikon AX spectral detector systems
 
 ## Plugin Overview
 
@@ -20,7 +31,7 @@ The plugin is organized as 3 subplugins:
 3. `Spectral Analysis`
 - collect stored ROI datasets for downstream analysis
 - compute emission-ratio metrics using a user-defined split wavelength
-- support Student's t-test and 1-way or 2-way ANOVA
+- support Student's t-test and one-way or two-way ANOVA
 - support blind-group analysis using PCA, feature comparison, user-selected clustering, and p-value statistics
 
 Features:
@@ -45,6 +56,18 @@ pip install -e .
 ```
 
 Then start napari and open the plugin widgets from the Plugins menu.
+
+## Intended users
+
+This plugin is designed for researchers working with spectral fluorescence
+microscopy datasets, especially solvatochromic probes such as Nile Red
+for myelin physicochemical analysis. It supports workflows involving:
+
+- Nikon spectral ND2 datasets
+- OME-Zarr spectral cubes
+- ROI-based emission ratio measurements
+- blinded experimental grouping (PCA)
+- multi-image aggregation across animals
 
 ## Dock Widgets
 
@@ -239,8 +262,29 @@ The analysis panel supports:
 9. Compute the analysis.
 10. Export ROI, image, or animal summary CSV files as needed.
 
+## Reproducibility note
+
+The spectral analysis tools implemented in this plugin reproduce the
+methodology described in Teo et al. (PNAS 2021) and Teo et al. (2024).
+The plugin itself is a new napari-based implementation designed to make
+these workflows accessible within OME-Zarr-compatible environments.
+
 ## Known Limitations
 
 - If `.zarr` files are opened through napari's generic file-open dialog, napari may still show a `Choose reader` popup when multiple readers claim `.zarr`. Use the plugin's own Zarr loader to avoid that workflow.
 - ROI datasets are stored in memory for the current napari session and should be exported if they need to survive a full application restart.
 - napari `Shapes` rendering can be sensitive in some environments. The plugin uses separate ROI label layers to reduce instability, but behavior can still depend on upstream napari and vispy rendering.
+
+
+## Citation
+
+This plugin implements spectral analysis workflows derived from the
+Nile Red myelin spectroscopy methodology described in:
+
+Teo et al., PNAS 2021
+https://doi.org/10.1073/pnas.2016897118
+
+Teo et al., 2024
+https://pmc.ncbi.nlm.nih.gov/articles/PMC11657930/
+
+If you use this plugin in research, please cite these papers.

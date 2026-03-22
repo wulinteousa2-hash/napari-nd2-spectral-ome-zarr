@@ -1,28 +1,57 @@
 name: napari-nd2-spectral-ome-zarr
 display_name: ND2 Spectral OME-Zarr
 schema_version: 0.2.1
+
+description: >-
+  A napari plugin for spectral imaging workflows using Nikon ND2 and OME-Zarr data,
+  supporting ND2-to-OME-Zarr conversion, spectral visualization across 400–740 nm,
+  and ROI-based spectral analysis derived from published Nile Red myelin spectroscopy methods.
+
 contributions:
   commands:
     - id: napari-nd2-spectral-ome-zarr.get_reader
       title: Open ND2 or OME-Zarr spectral image
       python_name: napari_nd2_spectral_ome_zarr._reader:napari_get_reader
+
     - id: napari-nd2-spectral-ome-zarr.widget
       title: ND2 Spectral OME-Zarr Exporter
       python_name: napari_nd2_spectral_ome_zarr._widget:Nd2SpectralWidget
+
     - id: napari-nd2-spectral-ome-zarr.spectral_viewer
       title: Spectral Viewer
       python_name: napari_nd2_spectral_ome_zarr._spectral_viewer:SpectralViewerWidget
+
     - id: napari-nd2-spectral-ome-zarr.spectral_analysis
       title: Spectral Analysis
       python_name: napari_nd2_spectral_ome_zarr._spectral_analysis:SpectralAnalysisWidget
+
   readers:
     - command: napari-nd2-spectral-ome-zarr.get_reader
       accepts_directories: true
-      filename_patterns: ["*.nd2", "*.zarr", "*.ome.zarr"]
+      filename_patterns:
+        - "*.nd2"
+        - "*.zarr"
+        - "*.ome.zarr"
+
   widgets:
     - command: napari-nd2-spectral-ome-zarr.widget
       display_name: ND2 Spectral Export
+
     - command: napari-nd2-spectral-ome-zarr.spectral_viewer
       display_name: Spectral Viewer
+
     - command: napari-nd2-spectral-ome-zarr.spectral_analysis
       display_name: Spectral Analysis
+
+citation: |
+  The spectral analysis functionality implemented in this plugin follows the
+  methodology described in:
+
+  Teo W et al., 2021.
+  Nile Red fluorescence spectroscopy reports early physicochemical changes in myelin with high sensitivity.
+  Proc Natl Acad Sci USA.
+  https://doi.org/10.1073/pnas.2016897118
+
+  Teo W et al., 2024.
+  Quantitation of the physicochemical properties of myelin using Nile Red fluorescence spectroscopy.
+  https://pmc.ncbi.nlm.nih.gov/articles/PMC11657930/
