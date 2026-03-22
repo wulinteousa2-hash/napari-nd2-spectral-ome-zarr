@@ -1,0 +1,38 @@
+[build-system]
+requires = ["setuptools>=69", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "napari-nd2-spectral-ome-zarr"
+version = "0.1.0"
+description = "napari plugin for reading Nikon ND2 spectral images and exporting OME-Zarr."
+readme = "README.md"
+requires-python = ">=3.10"
+license = {text = "MIT"}
+authors = [
+  {name = "OpenAI Codex"}
+]
+dependencies = [
+  "numpy",
+  "nd2>=0.10",
+  "dask[array]",
+  "zarr<3",
+  "numcodecs",
+  "ome-zarr",
+  "scikit-image",
+  "qtpy",
+  "matplotlib",
+]
+
+[project.entry-points."napari.manifest"]
+"napari-nd2-spectral-ome-zarr" = "napari_nd2_spectral_ome_zarr:napari.yaml"
+
+[tool.setuptools]
+package-dir = {"" = "src"}
+include-package-data = true
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.setuptools.package-data]
+napari_nd2_spectral_ome_zarr = ["napari.yaml", "resources/*.csv"]

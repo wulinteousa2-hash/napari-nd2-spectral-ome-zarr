@@ -1,0 +1,28 @@
+name: napari-nd2-spectral-ome-zarr
+display_name: ND2 Spectral OME-Zarr
+schema_version: 0.2.1
+contributions:
+  commands:
+    - id: napari-nd2-spectral-ome-zarr.get_reader
+      title: Open ND2 or OME-Zarr spectral image
+      python_name: napari_nd2_spectral_ome_zarr._reader:napari_get_reader
+    - id: napari-nd2-spectral-ome-zarr.widget
+      title: ND2 Spectral OME-Zarr Exporter
+      python_name: napari_nd2_spectral_ome_zarr._widget:Nd2SpectralWidget
+    - id: napari-nd2-spectral-ome-zarr.spectral_viewer
+      title: Spectral Viewer
+      python_name: napari_nd2_spectral_ome_zarr._spectral_viewer:SpectralViewerWidget
+    - id: napari-nd2-spectral-ome-zarr.spectral_analysis
+      title: Spectral Analysis
+      python_name: napari_nd2_spectral_ome_zarr._spectral_analysis:SpectralAnalysisWidget
+  readers:
+    - command: napari-nd2-spectral-ome-zarr.get_reader
+      accepts_directories: true
+      filename_patterns: ["*.nd2", "*.zarr", "*.ome.zarr"]
+  widgets:
+    - command: napari-nd2-spectral-ome-zarr.widget
+      display_name: ND2 Spectral Export
+    - command: napari-nd2-spectral-ome-zarr.spectral_viewer
+      display_name: Spectral Viewer
+    - command: napari-nd2-spectral-ome-zarr.spectral_analysis
+      display_name: Spectral Analysis
