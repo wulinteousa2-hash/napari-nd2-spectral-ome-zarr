@@ -19,6 +19,15 @@ classifiers = [
   "Programming Language :: Python :: 3.10",
   "Programming Language :: Python :: 3.11",
 ]
+keywords = [
+  "napari",
+  "spectral imaging",
+  "nd2",
+  "ome-zarr",
+  "myelin",
+  "nile red",
+  "fluorescence spectroscopy"
+]
 dependencies = [
   "numpy",
   "nd2>=0.10",
@@ -31,15 +40,19 @@ dependencies = [
   "matplotlib",
 ]
 
+[project.urls]
+Homepage = "https://github.com/wulinteousa2-hash/napari-nd2-spectral-ome-zarr"
+Repository = "https://github.com/wulinteousa2-hash/napari-nd2-spectral-ome-zarr"
+
 [project.entry-points."napari.manifest"]
 napari-nd2-spectral-ome-zarr = "napari_nd2_spectral_ome_zarr:napari.yaml"
 
-keywords = [
-  "napari",
-  "spectral imaging",
-  "ND2",
-  "OME-Zarr",
-  "myelin",
-  "Nile Red",
-  "fluorescence spectroscopy"
-]
+[tool.setuptools]
+package-dir = {"" = "src"}
+include-package-data = true
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.setuptools.package-data]
+napari_nd2_spectral_ome_zarr = ["napari.yaml", "resources/*.csv"]
