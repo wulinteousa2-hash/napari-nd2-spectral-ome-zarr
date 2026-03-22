@@ -2,6 +2,27 @@
 
 napari plugin for Nikon ND2 spectral imaging workflows with emphasis on 2D spectral cubes.
 
+## Plugin Overview
+
+The plugin is organized as 3 subplugins:
+
+1. `ND2 Spectral Export`
+- convert single files or batches from ND2 to OME-Zarr
+- load single or batch OME-Zarr datasets
+- validate image structure and dimensions such as axes order, shape, and wavelength metadata
+
+2. `Spectral Viewer`
+- visualize spectral images as truecolor using visible-wavelength hue mapping
+- provide a single-channel grayscale image for morphology review and machine-learning workflows
+- read spectral intensity versus wavelength in normalized or absolute modes
+- support ROI generation and ROI-based spectral extraction
+
+3. `Spectral Analysis`
+- collect stored ROI datasets for downstream analysis
+- compute emission-ratio metrics using a user-defined split wavelength
+- support Student's t-test and 1-way or 2-way ANOVA
+- support blind-group analysis using PCA, feature comparison, user-selected clustering, and p-value statistics
+
 Features:
 
 - Read `.nd2` files into napari
@@ -14,6 +35,16 @@ Features:
 - Run split-wavelength Nile Red ratio analysis, aggregation, and group comparison in a dedicated analysis panel
 
 The plugin is designed around 2D spectral images and keeps `T`, `C`, `Z`, `Y`, `X` axis semantics explicit during export.
+
+## Installation
+
+Install the plugin in a Python environment that can run napari:
+
+```bash
+pip install -e .
+```
+
+Then start napari and open the plugin widgets from the Plugins menu.
 
 ## Dock Widgets
 
@@ -137,6 +168,7 @@ When `Plot ROI Spectrum` is used, the selected ROI spectra are stored in memory 
 - Stored datasets remain available even if the image layer is later closed
 - Stored datasets can be exported from `Spectral Viewer`
 - Stored datasets are consumed by the `Spectral Analysis` panel
+- Stored datasets do not persist across a full napari restart unless they are exported
 
 ## Spectral Analysis Workflow
 
@@ -158,7 +190,7 @@ The `Stored ROI Datasets` table lets you annotate each captured dataset with:
 This supports experiments such as:
 
 - 10 images total
-- 5 WT and 5 HNPP animals
+- multiple experimental groups such as WT vs mutant, control vs treatment, or blinded cohorts
 - multiple myelin ROIs per image
 - aggregation from ROI level to image level to animal level
 
@@ -190,7 +222,7 @@ The analysis panel supports:
 - user-defined split wavelength
 - ratio modes such as above/below split intensity ratio
 - optional normalization before ratio calculation
-- WT vs HNPP comparison
+- two-group comparison such as WT vs mutant or control vs treatment
 - one-way ANOVA by selected factor
 - blind PCA and clustering for unlabeled datasets
 
@@ -206,3 +238,9 @@ The analysis panel supports:
 8. Set the wavelength split point.
 9. Compute the analysis.
 10. Export ROI, image, or animal summary CSV files as needed.
+
+## Known Limitations
+
+- If `.zarr` files are opened through napari's generic file-open dialog, napari may still show a `Choose reader` popup when multiple readers claim `.zarr`. Use the plugin's own Zarr loader to avoid that workflow.
+- ROI datasets are stored in memory for the current napari session and should be exported if they need to survive a full application restart.
+- napari `Shapes` rendering can be sensitive in some environments. The plugin uses separate ROI label layers to reduce instability, but behavior can still depend on upstream napari and vispy rendering.
