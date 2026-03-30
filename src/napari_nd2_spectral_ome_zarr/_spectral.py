@@ -83,7 +83,7 @@ def cie_to_rgb(xyz: np.ndarray) -> np.ndarray:
 def estimate_truecolor_rgb(
     spectral_cube: np.ndarray,
     wavelengths_nm: np.ndarray,
-    gamma: float = 0.9,
+    gamma: float = 1.4,
     use_gpu: bool = False,
 ) -> np.ndarray:
     xp = np

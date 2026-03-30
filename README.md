@@ -166,23 +166,59 @@ So if a pixel has 24 spectral bins, the displayed gray value is:
 
 ROI layers are now handled per image, not globally.
 
-- Each active spectral image gets its own Shapes layer named like `image_name ROI`
-- ROI labels are displayed through a separate companion label layer
+- Each spectral image gets its own Shapes layer named like `image_name ROI`
 - ROI numbering resets per image, so image 1 can have `ROI 1..N` and image 2 can also have `ROI 1..N`
 - ROIs from image 1 are not reused automatically for image 2
+- ROI helper visibility follows the active image context, so unrelated ROI overlays are hidden while working on one image
+- ROI layers are kept adjacent to their source spectral image in the napari layer list
+- ROI annotation text is drawn on the Shapes layer itself, without creating a separate visible annotation layer row
+
+### Spectral Viewer sections
+
+The viewer is organized into 3 sections:
+
+- `ROI Spectrum`
+- `ROI Comparison`
+- `Pseudocolor`
+
+This keeps ROI editing, cross-image comparison, and pseudocolor generation separated.
 
 ### Recommended step-by-step use
 
 1. Select a spectral image layer.
-2. Click `Prepare ROI Layer`.
-3. Draw ROIs for that image only.
-4. Click `Plot ROI Spectrum`.
-5. The plugin stores that image's ROI spectra in memory as a dataset.
+2. Click `Prepare ROI Layers`.
+3. Use `ROI image` and `Activate ROI Layer` if you need to jump directly to a specific image's ROI layer.
+4. Draw ROIs for that image only.
+5. `ROI Spectrum` updates for the active image and the plugin stores that image's ROI spectra in memory as a dataset.
 6. Move to the next image.
-7. Click `Prepare ROI Layer` again for that image.
+7. Activate that image's ROI layer.
 8. Draw a fresh set of ROIs starting from `ROI 1`.
 
 If you want to redraw for the current image, click `Clear Active ROI`. That clears only the active image's ROI shapes and restarts numbering from `ROI 1`.
+
+### Reactive ROI plotting
+
+The active ROI plot now responds immediately when these controls change:
+
+- `Normalized` / `Absolute`
+- `Plot individual ROIs`
+- `Plot pooled ROI mean`
+- `Include background label 0`
+- legend display options
+
+`Plot individual ROIs` is on by default.
+
+`Plot pooled ROI mean` is off by default and can be enabled only when needed.
+
+### ROI comparison across images
+
+`ROI Comparison` is intended for cross-image plotting after ROI datasets have been stored.
+
+- Use `Refresh All ROI Datasets` to update stored datasets from all open spectral images
+- The comparison table lists ROI traces and pooled traces from all stored datasets
+- Use `Plot Selected Across Images` to display selected traces from multiple source images on the same axes
+
+`Normalized` / `Absolute` now affects both the active ROI plot and the across-images comparison plot. Raw spectra are stored in memory and normalization is applied only at display time.
 
 ### Stored ROI datasets
 
@@ -191,11 +227,55 @@ When `Plot ROI Spectrum` is used, the selected ROI spectra are stored in memory 
 - Stored datasets remain available even if the image layer is later closed
 - Stored datasets can be exported from `Spectral Viewer`
 - Stored datasets are consumed by the `Spectral Analysis` panel
-- Stored datasets do not persist across a full napari restart unless they are exported
+- Stored datasets do not persist across a full napari restart unless they are exported or saved in a session package
+
+### Session package save/load
+
+`Spectral Viewer` now supports full session packaging with:
+
+- `Save Session Package`
+- `Load Session Package`
+
+A session package is saved as a folder containing:
+
+- `manifest.json`
+- `roi_shapes/*.json`
+- `roi_datasets/*.json`
+- `truecolor/*.tif`
+
+The package preserves the linkage between each source image and its ROI shapes by storing:
+
+- `source_layer_name`
+- `source_path`
+- saved ROI geometry
+- stored ROI spectral datasets
+- derived truecolor outputs
+
+### Session package limitations
+
+Session packages save enough information to restore ROI geometry, stored ROI datasets, and derived truecolor outputs.
+
+However, full spectral-layer restoration still depends on access to the original ND2 or OME-Zarr source paths recorded in the manifest.
+
+Saved truecolor TIFF files are included as derived outputs, but they do not replace the original spectral source data.
 
 ## Spectral Analysis Workflow
 
 `Spectral Analysis` is intended for multi-image and multi-animal experiments.
+
+The widget now reads from the same shared ROI dataset store used by `Spectral Viewer`, and its stored-dataset table refreshes automatically when ROI datasets are added, updated, or removed.
+
+### Analysis sections
+
+`Spectral Analysis` now includes:
+
+- a stored ROI dataset table
+- ROI / Image / Animal summary tables
+- a `Stats` section for statistical checks and comparisons
+- a larger report-style statistics view
+- an analysis plot canvas
+
+The report view is designed to behave more like a statistics console than a single one-line result field.
 
 ### Metadata editing
 
@@ -245,9 +325,102 @@ The analysis panel supports:
 - user-defined split wavelength
 - ratio modes such as above/below split intensity ratio
 - optional normalization before ratio calculation
-- two-group comparison such as WT vs mutant or control vs treatment
+- two-group comparison using a selected factor with exactly two groups
 - one-way ANOVA by selected factor
 - blind PCA and clustering for unlabeled datasets
+
+### Stats workflow
+
+The `Stats` section is intended to support a more standard statistics workflow:
+
+1. Review descriptive statistics.
+2. Check normality and homogeneity of variance.
+3. Decide whether parametric interpretation is appropriate.
+4. Run the relevant comparison or correlation workflow.
+
+Current `Stats` tools include:
+
+- `Descriptive Statistics`
+- `Normality & Equality of Variance`
+- `Two-Group Welch t-test`
+- `Correlation Coefficient`
+
+### Descriptive statistics
+
+The descriptive workflow reports grouped summary statistics using the selected `Stats factor`.
+
+Reported values include:
+
+- `n`
+- mean
+- standard deviation
+- SEM
+- median
+- IQR
+- confidence interval
+
+The confidence interval percentage can be changed in the UI.
+
+### Normality and equal-variance checks
+
+The assumption-check workflow currently includes:
+
+- Shapiro-Wilk normality testing per group when sample size is sufficient
+- Bartlett test for equal variances
+- Levene test for equal variances
+
+The report concludes whether:
+
+- groups are approximately normal
+- variances appear equal
+- parametric tests are appropriate or should be treated with caution
+
+The significance threshold is user-editable in the UI.
+
+### Two-group testing
+
+The two-group workflow uses a selectable factor:
+
+- `group_label`
+- `genotype`
+- `sex`
+- `age`
+- `region`
+- `batch`
+
+The Welch t-test runs only when the selected factor contains exactly two non-empty groups with at least two values each.
+
+This means users are not restricted to hardcoded labels such as `WT` and `HNPP`.
+
+### Correlation
+
+The correlation workflow lets the user choose numeric `x` and `y` fields from the current analysis level.
+
+It reports:
+
+- Pearson correlation
+- Spearman correlation
+
+and displays a scatter plot with a linear fit.
+
+### Statistical interpretation note
+
+The plugin currently mixes assumption checks with permutation-based inference:
+
+- descriptive and assumption checks are presented in a conventional statistical workflow
+- Welch t-test and ANOVA use standard test statistics
+- significance is estimated by permutation rather than classical closed-form p-values
+
+So the reported `t` and `F` values are standard-style statistics, but the reported p-values are permutation p-values.
+
+### Stats report export
+
+The report view can be exported with `Export Stats Report`.
+
+Supported output formats:
+
+- plain text
+- CSV
 
 ### Recommended experiment flow
 

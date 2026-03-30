@@ -6,11 +6,14 @@ from pathlib import Path
 import numpy as np
 from matplotlib.backends.backend_qtagg import FigureCanvasQTAgg
 from matplotlib.figure import Figure
+from scipy import stats
 from qtpy.QtCore import Qt
+from qtpy.QtGui import QPalette
 from qtpy.QtWidgets import (
     QCheckBox,
     QComboBox,
     QFileDialog,
+    QGroupBox,
     QHBoxLayout,
     QLabel,
     QLineEdit,
@@ -18,6 +21,7 @@ from qtpy.QtWidgets import (
     QTableWidget,
     QTableWidgetItem,
     QTabWidget,
+    QTextEdit,
     QVBoxLayout,
     QWidget,
 )
@@ -60,6 +64,10 @@ class SpectralAnalysisWidget(QWidget):
         self.level_combo = QComboBox()
         self.level_combo.addItems(["Animal", "Image", "ROI"])
         self.normalize_checkbox = QCheckBox("Normalize before ratio")
+        self.significance_edit = QLineEdit("0.05")
+        self.confidence_edit = QLineEdit("95")
+        self.stats_factor_combo = QComboBox()
+        self.stats_factor_combo.addItems(["group_label", "genotype", "sex", "age", "region", "batch"])
 
         self.refresh_button = QPushButton("Refresh Datasets")
         self.refresh_button.clicked.connect(self._refresh_dataset_table)
@@ -69,7 +77,9 @@ class SpectralAnalysisWidget(QWidget):
         self.remove_selected_button.clicked.connect(self._remove_selected_datasets)
         self.remove_current_button = QPushButton("Remove Current Row")
         self.remove_current_button.clicked.connect(self._remove_current_dataset)
-        self.ttest_button = QPushButton("WT vs HNPP Welch t-test")
+        self.ttest_factor_combo = QComboBox()
+        self.ttest_factor_combo.addItems(["group_label", "genotype", "sex", "age", "region", "batch"])
+        self.ttest_button = QPushButton("Two-Group Welch t-test")
         self.ttest_button.clicked.connect(self._run_ttest)
         self.anova_factor_combo = QComboBox()
         self.anova_factor_combo.addItems(["group_label", "genotype", "sex", "age", "region", "batch"])
@@ -79,6 +89,14 @@ class SpectralAnalysisWidget(QWidget):
         self.blind_k_combo.addItems(["2", "3"])
         self.pca_button = QPushButton("Blind PCA / Clustering")
         self.pca_button.clicked.connect(self._run_blind_analysis)
+        self.descriptive_button = QPushButton("Descriptive Statistics")
+        self.descriptive_button.clicked.connect(self._run_descriptive_stats)
+        self.normality_button = QPushButton("Normality & Equality of Variance")
+        self.normality_button.clicked.connect(self._run_normality_and_variance)
+        self.correlation_x_combo = QComboBox()
+        self.correlation_y_combo = QComboBox()
+        self.correlation_button = QPushButton("Correlation Coefficient")
+        self.correlation_button.clicked.connect(self._run_correlation)
 
         self.export_roi_button = QPushButton("Export ROI Table CSV")
         self.export_roi_button.clicked.connect(lambda: self._export_table_csv("roi"))
@@ -86,14 +104,18 @@ class SpectralAnalysisWidget(QWidget):
         self.export_image_button.clicked.connect(lambda: self._export_table_csv("image"))
         self.export_animal_button = QPushButton("Export Animal Table CSV")
         self.export_animal_button.clicked.connect(lambda: self._export_table_csv("animal"))
+        self.export_report_button = QPushButton("Export Stats Report")
+        self.export_report_button.clicked.connect(self._export_stats_report)
 
         self.dataset_table = QTableWidget()
         self.dataset_table.cellChanged.connect(self._on_dataset_cell_changed)
-        self.dataset_table.setAlternatingRowColors(True)
+        self.dataset_table.setAlternatingRowColors(False)
 
         self.roi_table = QTableWidget()
         self.image_table = QTableWidget()
         self.animal_table = QTableWidget()
+        for table in (self.dataset_table, self.roi_table, self.image_table, self.animal_table):
+            self._configure_table_palette(table)
 
         self.tabs = QTabWidget()
         self.tabs.addTab(self.roi_table, "ROI Table")
@@ -102,8 +124,11 @@ class SpectralAnalysisWidget(QWidget):
 
         self.figure = Figure(figsize=(5, 3))
         self.canvas = FigureCanvasQTAgg(self.figure)
-        self.stats_label = QLabel("Add ROI datasets from Spectral Viewer, annotate metadata, then compute analysis.")
-        self.stats_label.setWordWrap(True)
+        self.canvas.setMinimumHeight(300)
+        self.stats_report = QTextEdit()
+        self.stats_report.setReadOnly(True)
+        self.stats_report.setMinimumHeight(260)
+        self.stats_report.setPlainText("Add ROI datasets from Spectral Viewer, annotate metadata, then compute analysis.")
 
         top_controls = QHBoxLayout()
         top_controls.addWidget(QLabel("Split λ (nm)"))
@@ -119,7 +144,6 @@ class SpectralAnalysisWidget(QWidget):
         top_controls.addWidget(self.remove_current_button)
 
         stats_controls = QHBoxLayout()
-        stats_controls.addWidget(self.ttest_button)
         stats_controls.addWidget(QLabel("ANOVA factor"))
         stats_controls.addWidget(self.anova_factor_combo)
         stats_controls.addWidget(self.anova_button)
@@ -131,20 +155,75 @@ class SpectralAnalysisWidget(QWidget):
         export_controls.addWidget(self.export_roi_button)
         export_controls.addWidget(self.export_image_button)
         export_controls.addWidget(self.export_animal_button)
+        export_controls.addWidget(self.export_report_button)
+
+        stats_group = QGroupBox("Stats")
+        stats_group_layout = QVBoxLayout()
+
+        stats_options = QHBoxLayout()
+        stats_options.addWidget(QLabel("Stats factor"))
+        stats_options.addWidget(self.stats_factor_combo)
+        stats_options.addWidget(QLabel("Significance level"))
+        stats_options.addWidget(self.significance_edit)
+        stats_options.addWidget(QLabel("Confidence interval %"))
+        stats_options.addWidget(self.confidence_edit)
+        stats_group_layout.addLayout(stats_options)
+
+        stats_buttons = QHBoxLayout()
+        stats_buttons.addWidget(self.descriptive_button)
+        stats_buttons.addWidget(self.normality_button)
+        stats_buttons.addWidget(self.ttest_button)
+        stats_buttons.addWidget(QLabel("t-test factor"))
+        stats_buttons.addWidget(self.ttest_factor_combo)
+        stats_buttons.addWidget(QLabel("x"))
+        stats_buttons.addWidget(self.correlation_x_combo)
+        stats_buttons.addWidget(QLabel("y"))
+        stats_buttons.addWidget(self.correlation_y_combo)
+        stats_buttons.addWidget(self.correlation_button)
+        stats_group_layout.addLayout(stats_buttons)
+        stats_group.setLayout(stats_group_layout)
 
         layout = QVBoxLayout()
         layout.addLayout(top_controls)
         layout.addWidget(QLabel("Stored ROI Datasets"))
         layout.addWidget(self.dataset_table)
+        layout.addWidget(stats_group)
         layout.addLayout(stats_controls)
         layout.addLayout(export_controls)
         layout.addWidget(self.tabs)
+        layout.addWidget(self.stats_report)
         layout.addWidget(self.canvas)
-        layout.addWidget(self.stats_label)
         self.setLayout(layout)
 
+        ROI_SPECTRUM_STORE.subscribe(self._on_store_changed)
         self._refresh_dataset_table()
+        self._refresh_correlation_field_combos()
+        self.level_combo.currentTextChanged.connect(lambda _text: self._refresh_correlation_field_combos())
         float_parent_dock_later(self)
+
+    def closeEvent(self, event):
+        ROI_SPECTRUM_STORE.unsubscribe(self._on_store_changed)
+        super().closeEvent(event)
+
+    def _configure_table_palette(self, table: QTableWidget):
+        palette = table.palette()
+        text_color = palette.color(QPalette.Text)
+        base_color = palette.color(QPalette.Base)
+        for group in (QPalette.Active, QPalette.Inactive, QPalette.Disabled):
+            palette.setColor(group, QPalette.Text, text_color)
+            palette.setColor(group, QPalette.WindowText, text_color)
+            palette.setColor(group, QPalette.HighlightedText, text_color)
+            palette.setColor(group, QPalette.Base, base_color)
+            palette.setColor(group, QPalette.AlternateBase, base_color)
+        table.setPalette(palette)
+
+    def _style_table_item(self, table: QTableWidget, item: QTableWidgetItem):
+        palette = table.palette()
+        item.setForeground(palette.brush(QPalette.Text))
+        item.setBackground(palette.brush(QPalette.Base))
+
+    def _on_store_changed(self):
+        self._refresh_dataset_table()
 
     def _refresh_dataset_table(self):
         datasets = ROI_SPECTRUM_STORE.list_datasets()
@@ -186,6 +265,7 @@ class SpectralAnalysisWidget(QWidget):
                     item.setFlags((item.flags() | Qt.ItemIsUserCheckable | Qt.ItemIsEnabled) & ~Qt.ItemIsEditable)
                 elif not editable:
                     item.setFlags(item.flags() & ~Qt.ItemIsEditable)
+                self._style_table_item(self.dataset_table, item)
                 self.dataset_table.setItem(row_index, column_index, item)
         self.dataset_table.resizeColumnsToContents()
         self._updating_dataset_table = False
@@ -241,12 +321,12 @@ class SpectralAnalysisWidget(QWidget):
     def _compute_analysis(self):
         datasets = self._selected_datasets()
         if not datasets:
-            self.stats_label.setText("No selected ROI datasets available.")
+            self.stats_report.setPlainText("No selected ROI datasets available.")
             return
         try:
             split_nm = self._split_value()
         except ValueError:
-            self.stats_label.setText("Split wavelength must be numeric.")
+            self.stats_report.setPlainText("Split wavelength must be numeric.")
             return
 
         roi_rows = []
@@ -347,7 +427,8 @@ class SpectralAnalysisWidget(QWidget):
         self._populate_table(self.roi_table, roi_rows)
         self._populate_table(self.image_table, image_rows)
         self._populate_table(self.animal_table, animal_rows)
-        self.stats_label.setText(
+        self._refresh_correlation_field_combos()
+        self.stats_report.setPlainText(
             f"Computed ROI ratios at split {split_nm:.1f} nm for {len(roi_rows)} ROI(s), "
             f"{len(image_rows)} image set(s), and {len(animal_rows)} animal aggregate(s) from {len(datasets)} selected dataset(s)."
         )
@@ -356,7 +437,7 @@ class SpectralAnalysisWidget(QWidget):
         datasets = ROI_SPECTRUM_STORE.list_datasets()
         indices = [index for index, dataset in enumerate(datasets) if dataset.dataset_id in self._selected_dataset_ids]
         if not indices:
-            self.stats_label.setText("No selected datasets to remove.")
+            self.stats_report.setPlainText("No selected datasets to remove.")
             return
         ROI_SPECTRUM_STORE.remove_datasets(indices)
         self._selected_dataset_ids.clear()
@@ -368,16 +449,16 @@ class SpectralAnalysisWidget(QWidget):
         self._populate_table(self.image_table, [])
         self._populate_table(self.animal_table, [])
         self._refresh_dataset_table()
-        self.stats_label.setText(f"Removed {len(indices)} selected dataset(s) from memory.")
+        self.stats_report.setPlainText(f"Removed {len(indices)} selected dataset(s) from memory.")
 
     def _remove_current_dataset(self):
         row = self.dataset_table.currentRow()
         if row < 0:
-            self.stats_label.setText("Select a dataset row to remove.")
+            self.stats_report.setPlainText("Select a dataset row to remove.")
             return
         item = self.dataset_table.item(row, 1)
         if item is None:
-            self.stats_label.setText("Select a valid dataset row to remove.")
+            self.stats_report.setPlainText("Select a valid dataset row to remove.")
             return
         dataset_index = item.data(Qt.UserRole)
         dataset = ROI_SPECTRUM_STORE.get_dataset(dataset_index)
@@ -391,7 +472,7 @@ class SpectralAnalysisWidget(QWidget):
         self._populate_table(self.image_table, [])
         self._populate_table(self.animal_table, [])
         self._refresh_dataset_table()
-        self.stats_label.setText(f"Removed dataset {dataset.dataset_id} from memory.")
+        self.stats_report.setPlainText(f"Removed dataset {dataset.dataset_id} from memory.")
 
     def _populate_table(self, table: QTableWidget, rows: list[dict]):
         table.clear()
@@ -407,6 +488,7 @@ class SpectralAnalysisWidget(QWidget):
             for column_index, header in enumerate(headers):
                 item = QTableWidgetItem(str(row[header]))
                 item.setFlags(item.flags() & ~Qt.ItemIsEditable)
+                self._style_table_item(table, item)
                 table.setItem(row_index, column_index, item)
         table.resizeColumnsToContents()
 
@@ -418,26 +500,241 @@ class SpectralAnalysisWidget(QWidget):
             return self._image_rows
         return self._animal_rows
 
+    def _alpha_value(self) -> float:
+        return float(self.significance_edit.text().strip())
+
+    def _confidence_fraction(self) -> float:
+        return float(self.confidence_edit.text().strip()) / 100.0
+
+    def _set_stats_text(self, title: str, lines: list[str]):
+        self.stats_report.setPlainText("\n".join([title, *lines]))
+
+    def _finalize_analysis_axis(self, axis, *, title: str, xlabel: str, ylabel: str):
+        axis.set_xlabel(xlabel)
+        axis.set_ylabel(ylabel)
+        axis.set_title(title)
+        axis.grid(True, alpha=0.3)
+        legend = axis.legend(fontsize=8)
+        if legend is not None:
+            legend.set_draggable(True)
+        self.figure.subplots_adjust(left=0.1, right=0.96, top=0.9, bottom=0.16)
+
+    def _metric_key_for_rows(self, rows: list[dict]) -> str:
+        return "mean_ratio" if rows and "mean_ratio" in rows[0] else "ratio"
+
+    def _group_metric_values(self, factor: str) -> tuple[list[dict], dict[str, np.ndarray], str]:
+        rows = self._selected_level_rows()
+        metric_key = self._metric_key_for_rows(rows)
+        grouped: dict[str, list[float]] = {}
+        for row in rows:
+            label = str(row.get(factor, "")).strip()
+            value = row.get(metric_key)
+            if not label or value is None:
+                continue
+            try:
+                grouped.setdefault(label, []).append(float(value))
+            except (TypeError, ValueError):
+                continue
+        grouped_arrays = {
+            label: np.asarray(values, dtype=np.float32)
+            for label, values in grouped.items()
+            if len(values) > 0
+        }
+        return rows, grouped_arrays, metric_key
+
+    def _refresh_correlation_field_combos(self):
+        rows = self._selected_level_rows()
+        numeric_fields: list[str] = []
+        if rows:
+            sample = rows[0]
+            for key in sample.keys():
+                values = []
+                for row in rows:
+                    value = row.get(key)
+                    try:
+                        values.append(float(value))
+                    except (TypeError, ValueError):
+                        values = []
+                        break
+                if values:
+                    numeric_fields.append(key)
+        self.correlation_x_combo.blockSignals(True)
+        self.correlation_y_combo.blockSignals(True)
+        self.correlation_x_combo.clear()
+        self.correlation_y_combo.clear()
+        for field in numeric_fields:
+            self.correlation_x_combo.addItem(field)
+            self.correlation_y_combo.addItem(field)
+        if "ratio" in numeric_fields:
+            self.correlation_x_combo.setCurrentText("ratio")
+        elif "mean_ratio" in numeric_fields:
+            self.correlation_x_combo.setCurrentText("mean_ratio")
+        if "n_roi" in numeric_fields:
+            self.correlation_y_combo.setCurrentText("n_roi")
+        elif "n_rois" in numeric_fields:
+            self.correlation_y_combo.setCurrentText("n_rois")
+        self.correlation_x_combo.blockSignals(False)
+        self.correlation_y_combo.blockSignals(False)
+
+    def _export_stats_report(self):
+        report_text = self.stats_report.toPlainText().strip()
+        if not report_text:
+            self.stats_report.setPlainText("No statistics report available to export.")
+            return
+        path, _ = QFileDialog.getSaveFileName(
+            self,
+            "Export Stats Report",
+            "stats_report.txt",
+            "Text files (*.txt);;CSV files (*.csv)",
+        )
+        if not path:
+            return
+        output_path = Path(path)
+        if output_path.suffix.lower() == ".csv":
+            with output_path.open("w", newline="", encoding="utf-8") as handle:
+                writer = csv.writer(handle)
+                for line in report_text.splitlines():
+                    writer.writerow([line])
+        else:
+            output_path.write_text(report_text, encoding="utf-8")
+        self.stats_report.setPlainText(report_text + f"\n\nExported report to {output_path.name}")
+
+    def _run_descriptive_stats(self):
+        factor = self.stats_factor_combo.currentText()
+        _rows, grouped, metric_key = self._group_metric_values(factor)
+        if not grouped:
+            self.stats_report.setPlainText(f"No numeric {metric_key} values available for descriptive statistics by {factor}.")
+            return
+        confidence = self._confidence_fraction()
+        alpha = 1.0 - confidence
+        lines = [f"Factor: {factor}", f"Metric: {metric_key}", f"Confidence interval: {confidence * 100:.1f}%"]
+        self.figure.clear()
+        axis = self.figure.add_subplot(111)
+        labels = []
+        plot_values = []
+        for label, values in grouped.items():
+            mean_val = float(np.mean(values))
+            sd_val = float(np.std(values, ddof=1)) if len(values) > 1 else 0.0
+            sem_val = float(sd_val / np.sqrt(len(values))) if len(values) > 1 else 0.0
+            median_val = float(np.median(values))
+            q1, q3 = np.percentile(values, [25, 75])
+            if len(values) > 1:
+                ci_half = float(stats.t.ppf(1.0 - alpha / 2.0, df=len(values) - 1) * sem_val)
+            else:
+                ci_half = 0.0
+            lines.append(
+                f"{label}: n={len(values)}, mean={mean_val:.4f}, sd={sd_val:.4f}, sem={sem_val:.4f}, "
+                f"median={median_val:.4f}, IQR=({q1:.4f}, {q3:.4f}), CI=({mean_val - ci_half:.4f}, {mean_val + ci_half:.4f})"
+            )
+            labels.append(label)
+            plot_values.append(values)
+        axis.boxplot(plot_values, tick_labels=labels)
+        self._finalize_analysis_axis(
+            axis,
+            title="Descriptive statistics",
+            xlabel=factor,
+            ylabel=metric_key,
+        )
+        self.canvas.draw()
+        self._set_stats_text("Descriptive statistics", lines)
+
+    def _run_normality_and_variance(self):
+        factor = self.stats_factor_combo.currentText()
+        _rows, grouped, metric_key = self._group_metric_values(factor)
+        if len(grouped) < 2:
+            self.stats_report.setPlainText(f"Need at least two non-empty {factor} groups for normality and variance checks.")
+            return
+        alpha = self._alpha_value()
+        normal_flags = []
+        lines = [f"Factor: {factor}", f"Metric: {metric_key}", f"Significance level: {alpha:.3f}", ""]
+        lines.append("--- Shapiro-Wilk normality test (normal if p > alpha) ---")
+        valid_groups = []
+        for label, values in grouped.items():
+            if len(values) < 3:
+                lines.append(f"{label}: n={len(values)} is too small for Shapiro-Wilk.")
+                continue
+            statistic, pvalue = stats.shapiro(values)
+            is_normal = pvalue > alpha
+            normal_flags.append(is_normal)
+            valid_groups.append(values)
+            lines.append(f"{label}: W={statistic:.4f}, p={pvalue:.4g}, {'NORMAL' if is_normal else 'NOT normal'}")
+        if len(valid_groups) < 2:
+            self._set_stats_text("Normality & equality of variance", lines + ["Not enough groups passed minimum size for variance testing."])
+            return
+        lines.append("")
+        lines.append("--- Homogeneity of variances (equal if p > alpha) ---")
+        bart_stat, bart_p = stats.bartlett(*valid_groups)
+        lev_stat, lev_p = stats.levene(*valid_groups, center="median")
+        lines.append(f"Bartlett: statistic={bart_stat:.4f}, p={bart_p:.4g}, {'EQUAL' if bart_p > alpha else 'NOT equal'}")
+        lines.append(f"Levene: statistic={lev_stat:.4f}, p={lev_p:.4g}, {'EQUAL' if lev_p > alpha else 'NOT equal'}")
+        lines.append("")
+        if normal_flags and all(normal_flags) and bart_p > alpha and lev_p > alpha:
+            lines.append("Conclusion: groups are approximately normal and have equal variances. Parametric tests are appropriate.")
+        else:
+            lines.append("Conclusion: use parametric tests only with caution; otherwise nonparametric methods are more appropriate.")
+        self.figure.clear()
+        axis = self.figure.add_subplot(111)
+        labels = list(grouped.keys())
+        box_values = [grouped[label] for label in labels]
+        axis.boxplot(box_values, tick_labels=labels)
+        self._finalize_analysis_axis(
+            axis,
+            title="Normality and variance check",
+            xlabel=factor,
+            ylabel=metric_key,
+        )
+        self.canvas.draw()
+        self._set_stats_text("Normality & equality of variance", lines)
+
     def _run_ttest(self):
         rows = self._selected_level_rows()
         if not rows:
-            self.stats_label.setText("Compute analysis before running t-test.")
+            self.stats_report.setPlainText("Compute analysis before running t-test.")
             return
-        wt = [float(row["mean_ratio"] if "mean_ratio" in row else row["ratio"]) for row in rows if str(row.get("group_label", "")).strip().lower() == "wt"]
-        hnpp = [float(row["mean_ratio"] if "mean_ratio" in row else row["ratio"]) for row in rows if str(row.get("group_label", "")).strip().lower() == "hnpp"]
-        if len(wt) < 2 or len(hnpp) < 2:
-            self.stats_label.setText("Need at least two WT and two HNPP values at the selected analysis level.")
+        metric_key = "mean_ratio" if rows and "mean_ratio" in rows[0] else "ratio"
+        factor = self.ttest_factor_combo.currentText()
+        grouped: dict[str, list[float]] = {}
+        for row in rows:
+            label = str(row.get(factor, "")).strip()
+            if not label:
+                continue
+            grouped.setdefault(label, []).append(float(row[metric_key]))
+        valid = [(label, values) for label, values in grouped.items() if len(values) >= 2]
+        if len(valid) != 2:
+            self.stats_report.setPlainText(
+                f"Welch t-test requires exactly two non-empty {factor} groups with at least two values each."
+            )
             return
-        statistic, pvalue = self._welch_ttest_permutation(np.asarray(wt, dtype=np.float32), np.asarray(hnpp, dtype=np.float32))
-        self.stats_label.setText(
-            f"Welch t-test on {self.level_combo.currentText().lower()} means: "
-            f"WT n={len(wt)}, HNPP n={len(hnpp)}, t={statistic:.4f}, permutation p={pvalue:.4g}"
+        (label_a, values_a), (label_b, values_b) = valid
+        statistic, pvalue = self._welch_ttest_permutation(
+            np.asarray(values_a, dtype=np.float32),
+            np.asarray(values_b, dtype=np.float32),
         )
+        self._set_stats_text(
+            "Welch t-test",
+            [
+                f"Level: {self.level_combo.currentText()}",
+                f"Factor: {factor}",
+                f"Groups: {label_a} (n={len(values_a)}) vs {label_b} (n={len(values_b)})",
+                f"t = {statistic:.4f}",
+                f"Permutation p = {pvalue:.4g}",
+            ],
+        )
+        self.figure.clear()
+        axis = self.figure.add_subplot(111)
+        axis.boxplot([values_a, values_b], tick_labels=[label_a, label_b])
+        self._finalize_analysis_axis(
+            axis,
+            title="Two-group comparison",
+            xlabel=factor,
+            ylabel=metric_key,
+        )
+        self.canvas.draw()
 
     def _run_anova(self):
         rows = self._selected_level_rows()
         if not rows:
-            self.stats_label.setText("Compute analysis before running ANOVA.")
+            self.stats_report.setPlainText("Compute analysis before running ANOVA.")
             return
         factor = self.anova_factor_combo.currentText()
         grouped: dict[str, list[float]] = {}
@@ -449,22 +746,28 @@ class SpectralAnalysisWidget(QWidget):
             grouped.setdefault(label, []).append(float(row[metric_key]))
         valid = [(label, values) for label, values in grouped.items() if len(values) >= 2]
         if len(valid) < 2:
-            self.stats_label.setText(f"Need at least two non-empty {factor} groups with >=2 values each for ANOVA.")
+            self.stats_report.setPlainText(f"Need at least two non-empty {factor} groups with >=2 values each for ANOVA.")
             return
         statistic, pvalue = self._anova_permutation([np.asarray(values, dtype=np.float32) for _label, values in valid])
         summary = ", ".join(f"{label}:n={len(values)}" for label, values in valid)
-        self.stats_label.setText(
-            f"One-way ANOVA by {factor} on {self.level_combo.currentText().lower()} values: "
-            f"F={statistic:.4f}, permutation p={pvalue:.4g} ({summary})"
+        self._set_stats_text(
+            "One-way ANOVA",
+            [
+                f"Factor: {factor}",
+                f"Level: {self.level_combo.currentText()}",
+                f"F = {statistic:.4f}",
+                f"Permutation p = {pvalue:.4g}",
+                f"Groups: {summary}",
+            ],
         )
 
     def _run_blind_analysis(self):
         if not self._animal_rows or not self._animal_spectra:
-            self.stats_label.setText("Compute analysis before running blind PCA.")
+            self.stats_report.setPlainText("Compute analysis before running blind PCA.")
             return
         spectra = np.stack(self._animal_spectra, axis=0)
         if spectra.shape[0] < 2:
-            self.stats_label.setText("Need at least two animal spectra for blind PCA.")
+            self.stats_report.setPlainText("Need at least two animal spectra for blind PCA.")
             return
         if self.normalize_checkbox.isChecked():
             spectra = np.stack([self._normalized(spectrum) for spectrum in spectra], axis=0)
@@ -486,15 +789,74 @@ class SpectralAnalysisWidget(QWidget):
                 blind_id = self._animal_rows[row_index].get("blind_id") or self._animal_rows[row_index].get("animal_id")
                 axis.text(scores[row_index, 0], scores[row_index, 1], str(blind_id), fontsize=8)
         total_var = np.sum(singular_values**2) + 1e-8
-        axis.set_xlabel(f"PC1 ({(singular_values[0] ** 2 / total_var) * 100:.1f}%)")
+        pc1_label = f"PC1 ({(singular_values[0] ** 2 / total_var) * 100:.1f}%)"
         pc2_pct = (singular_values[1] ** 2 / total_var) * 100 if singular_values.shape[0] > 1 else 0.0
-        axis.set_ylabel(f"PC2 ({pc2_pct:.1f}%)")
-        axis.set_title("Blind PCA clustering")
-        axis.legend()
-        axis.grid(True, alpha=0.3)
+        pc2_label = f"PC2 ({pc2_pct:.1f}%)"
+        self._finalize_analysis_axis(
+            axis,
+            title="Blind PCA clustering",
+            xlabel=pc1_label,
+            ylabel=pc2_label,
+        )
         self.canvas.draw()
-        self.stats_label.setText(
-            f"Blind PCA clustering complete on animal spectra: separation={separation:.4f}, permutation p={pvalue:.4g}."
+        self._set_stats_text(
+            "Blind PCA / Clustering",
+            [
+                f"Animals analyzed: {spectra.shape[0]}",
+                f"Clusters: {int(self.blind_k_combo.currentText())}",
+                f"Separation = {separation:.4f}",
+                f"Permutation p = {pvalue:.4g}",
+            ],
+        )
+
+    def _run_correlation(self):
+        rows = self._selected_level_rows()
+        if not rows:
+            self.stats_report.setPlainText("Compute analysis before running correlation.")
+            return
+        x_key = self.correlation_x_combo.currentText()
+        y_key = self.correlation_y_combo.currentText()
+        if not x_key or not y_key:
+            self.stats_report.setPlainText("Select two numeric fields for correlation.")
+            return
+        x_values = []
+        y_values = []
+        for row in rows:
+            try:
+                x_values.append(float(row[x_key]))
+                y_values.append(float(row[y_key]))
+            except (TypeError, ValueError, KeyError):
+                continue
+        if len(x_values) < 3:
+            self.stats_report.setPlainText("Need at least three paired numeric values for correlation.")
+            return
+        x = np.asarray(x_values, dtype=np.float32)
+        y = np.asarray(y_values, dtype=np.float32)
+        pearson_r, pearson_p = stats.pearsonr(x, y)
+        spearman_rho, spearman_p = stats.spearmanr(x, y)
+        self.figure.clear()
+        axis = self.figure.add_subplot(111)
+        axis.scatter(x, y, label=f"n={len(x)}")
+        coeffs = np.polyfit(x, y, 1)
+        fit_x = np.linspace(float(np.min(x)), float(np.max(x)), 100)
+        fit_y = coeffs[0] * fit_x + coeffs[1]
+        axis.plot(fit_x, fit_y, linestyle="--", color="black", label="Linear fit")
+        self._finalize_analysis_axis(
+            axis,
+            title="Correlation",
+            xlabel=x_key,
+            ylabel=y_key,
+        )
+        self.canvas.draw()
+        self._set_stats_text(
+            "Correlation coefficient",
+            [
+                f"Level: {self.level_combo.currentText()}",
+                f"x = {x_key}",
+                f"y = {y_key}",
+                f"Pearson r = {pearson_r:.4f}, p = {pearson_p:.4g}",
+                f"Spearman rho = {spearman_rho:.4f}, p = {spearman_p:.4g}",
+            ],
         )
 
     def _kmeans(self, data: np.ndarray, k: int, max_iter: int = 50) -> np.ndarray:
@@ -596,7 +958,7 @@ class SpectralAnalysisWidget(QWidget):
             "animal": self._animal_rows,
         }[table_name]
         if not rows:
-            self.stats_label.setText(f"No {table_name} analysis table available to export.")
+            self.stats_report.setPlainText(f"No {table_name} analysis table available to export.")
             return
         path, _ = QFileDialog.getSaveFileName(self, f"Export {table_name.title()} Table CSV", f"{table_name}_analysis.csv", "CSV files (*.csv)")
         if not path:
@@ -605,4 +967,4 @@ class SpectralAnalysisWidget(QWidget):
             writer = csv.DictWriter(handle, fieldnames=list(rows[0].keys()))
             writer.writeheader()
             writer.writerows(rows)
-        self.stats_label.setText(f"Exported {table_name} analysis table to {Path(path).name}")
+        self.stats_report.setPlainText(f"Exported {table_name} analysis table to {Path(path).name}")

@@ -5,6 +5,7 @@ from pathlib import Path
 from concurrent.futures import ProcessPoolExecutor, as_completed
 
 from qtpy.QtCore import QObject, Qt, QThread, Signal
+from qtpy.QtGui import QPalette
 from qtpy.QtWidgets import (
     QCheckBox,
     QFileDialog,
@@ -145,7 +146,8 @@ class Nd2SpectralWidget(QWidget):
         self.zarr_info_label = QLabel("No Zarr selected.")
         self.zarr_info_label.setWordWrap(True)
         self.zarr_batch_table = QTableWidget()
-        self.zarr_batch_table.setAlternatingRowColors(True)
+        self.zarr_batch_table.setAlternatingRowColors(False)
+        self._configure_zarr_batch_table_palette()
         self._update_gpu_indicator()
         self.zarr_input_edit.pathDropped.connect(self._update_zarr_info)
         self.zarr_input_edit.textChanged.connect(self._update_zarr_info)
@@ -422,10 +424,30 @@ class Nd2SpectralWidget(QWidget):
                 else:
                     item = QTableWidgetItem(str(entry[column_name]))
                     item.setFlags(item.flags() & ~Qt.ItemIsEditable)
+                self._style_zarr_batch_item(item, row_index)
                 item.setData(Qt.UserRole, row_index)
                 self.zarr_batch_table.setItem(row_index, column_index, item)
         self.zarr_batch_table.resizeColumnsToContents()
         self._updating_zarr_table = False
+
+    def _configure_zarr_batch_table_palette(self):
+        palette = self.zarr_batch_table.palette()
+        text_color = palette.color(QPalette.Text)
+        base_color = palette.color(QPalette.Base)
+
+        for group in (QPalette.Active, QPalette.Inactive, QPalette.Disabled):
+            palette.setColor(group, QPalette.Text, text_color)
+            palette.setColor(group, QPalette.WindowText, text_color)
+            palette.setColor(group, QPalette.HighlightedText, text_color)
+            palette.setColor(group, QPalette.Base, base_color)
+            palette.setColor(group, QPalette.AlternateBase, base_color)
+
+        self.zarr_batch_table.setPalette(palette)
+
+    def _style_zarr_batch_item(self, item: QTableWidgetItem, row_index: int):
+        palette = self.zarr_batch_table.palette()
+        item.setForeground(palette.brush(QPalette.Text))
+        item.setBackground(palette.brush(QPalette.Base))
 
     def _set_all_zarr_rows_checked(self, checked: bool):
         if not self._zarr_batch_entries:
