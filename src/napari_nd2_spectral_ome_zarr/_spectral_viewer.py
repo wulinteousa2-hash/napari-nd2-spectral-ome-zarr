@@ -10,6 +10,7 @@ from matplotlib.backends.backend_qtagg import FigureCanvasQTAgg
 from matplotlib.figure import Figure
 from qtpy.QtCore import QObject, Qt, QThread, QTimer, Signal
 from qtpy.QtWidgets import (
+    QAbstractItemView,
     QCheckBox,
     QComboBox,
     QFileDialog,
@@ -246,11 +247,13 @@ class SpectralViewerWidget(QWidget):
 
         self.plot_button = QPushButton("Refresh Active ROI Spectrum")
         self.plot_button.clicked.connect(self._plot_roi_spectrum)
+        self.prepare_selected_roi_button = QPushButton("Prepare Selected ROI")
+        self.prepare_selected_roi_button.clicked.connect(self._prepare_selected_roi_layer)
         self.prepare_all_roi_button = QPushButton("Prepare ROI Layers")
         self.prepare_all_roi_button.clicked.connect(self._prepare_all_roi_layers)
         self.roi_image_combo = QComboBox()
-        self.activate_roi_button = QPushButton("Activate ROI Layer")
-        self.activate_roi_button.clicked.connect(self._activate_selected_roi_layer)
+        self.find_roi_image_button = QPushButton("Find Image")
+        self.find_roi_image_button.clicked.connect(self._focus_selected_roi_image)
         self.labels_layer_combo = QComboBox()
         self.bind_labels_button = QPushButton("Bind Labels To Active Image")
         self.bind_labels_button.clicked.connect(self._bind_selected_labels_layer)
@@ -303,10 +306,14 @@ class SpectralViewerWidget(QWidget):
         self.comparison_table.setColumnCount(len(self.COMPARISON_COLUMNS))
         self.comparison_table.setHorizontalHeaderLabels(self.COMPARISON_COLUMNS)
         self.comparison_table.setMinimumHeight(180)
+        self.comparison_table.setSelectionBehavior(QAbstractItemView.SelectRows)
+        self.comparison_table.setSelectionMode(QAbstractItemView.ExtendedSelection)
         self.refresh_comparison_button = QPushButton("Refresh Comparison Table")
         self.refresh_comparison_button.clicked.connect(self._refresh_comparison_table)
         self.plot_selected_comparison_button = QPushButton("Plot Selected Across Images")
         self.plot_selected_comparison_button.clicked.connect(self._plot_selected_comparison_rows)
+        self.remove_selected_comparison_button = QPushButton("Remove Selected Rows")
+        self.remove_selected_comparison_button.clicked.connect(self._remove_selected_comparison_rows)
         self.figure = Figure(figsize=(5, 3))
         self.canvas = FigureCanvasQTAgg(self.figure)
         self.canvas.setMinimumHeight(320)
@@ -341,10 +348,11 @@ class SpectralViewerWidget(QWidget):
         pseudocolor_controls.addWidget(self.adaptive_eq_checkbox)
 
         roi_buttons = QHBoxLayout()
+        roi_buttons.addWidget(self.prepare_selected_roi_button)
         roi_buttons.addWidget(self.prepare_all_roi_button)
         roi_buttons.addWidget(QLabel("ROI image"))
         roi_buttons.addWidget(self.roi_image_combo)
-        roi_buttons.addWidget(self.activate_roi_button)
+        roi_buttons.addWidget(self.find_roi_image_button)
         roi_buttons.addWidget(QLabel("Labels layer"))
         roi_buttons.addWidget(self.labels_layer_combo)
         roi_buttons.addWidget(self.bind_labels_button)
@@ -372,6 +380,7 @@ class SpectralViewerWidget(QWidget):
         comparison_buttons.addWidget(QLabel("ROI comparison"))
         comparison_buttons.addWidget(self.refresh_comparison_button)
         comparison_buttons.addWidget(self.plot_selected_comparison_button)
+        comparison_buttons.addWidget(self.remove_selected_comparison_button)
 
         roi_group = QGroupBox("ROI Spectrum")
         roi_group_layout = QVBoxLayout()
@@ -457,6 +466,9 @@ class SpectralViewerWidget(QWidget):
     def _on_active_layer_changed(self, event=None):
         del event
         self._sync_roi_context_visibility()
+        active_layer = getattr(self.viewer.layers.selection, "active", None)
+        if self._source_layer_name_for_layer(active_layer):
+            self._schedule_auto_plot_roi_spectrum()
 
     def _find_layer_by_name(self, name: str):
         for layer in self.viewer.layers:
@@ -504,11 +516,13 @@ class SpectralViewerWidget(QWidget):
         if not spectral_layers:
             self.roi_image_combo.addItem("No open spectral images", userData=None)
             self.roi_image_combo.setEnabled(False)
-            self.activate_roi_button.setEnabled(False)
+            self.prepare_selected_roi_button.setEnabled(False)
+            self.find_roi_image_button.setEnabled(False)
             self.roi_image_combo.blockSignals(False)
             return
         self.roi_image_combo.setEnabled(True)
-        self.activate_roi_button.setEnabled(True)
+        self.prepare_selected_roi_button.setEnabled(True)
+        self.find_roi_image_button.setEnabled(True)
         selected_index = 0
         for index, layer in enumerate(spectral_layers):
             self.roi_image_combo.addItem(layer.name, userData=layer.name)
@@ -652,13 +666,14 @@ class SpectralViewerWidget(QWidget):
         labels_layer.events.data.connect(self._schedule_auto_plot_roi_spectrum)
         self._bound_labels_layer_ids.add(layer_id)
 
-    def _ensure_roi_shapes_layer(self, spectral_layer_name: str):
+    def _ensure_roi_shapes_layer(self, spectral_layer_name: str, *, activate: bool = True):
         self._remove_legacy_roi_label_layer(spectral_layer_name)
         layer = self._find_roi_shapes_layer(spectral_layer_name)
         if layer is not None:
             self._bind_roi_layer_events(layer)
             self._reorder_roi_context_layers()
-            self.viewer.layers.selection.active = layer
+            if activate:
+                self.viewer.layers.selection.active = layer
             self._sync_roi_context_visibility()
             return layer
         layer = self.viewer.add_shapes(
@@ -670,7 +685,8 @@ class SpectralViewerWidget(QWidget):
         )
         self._bind_roi_layer_events(layer)
         self._reorder_roi_context_layers()
-        self.viewer.layers.selection.active = layer
+        if activate:
+            self.viewer.layers.selection.active = layer
         self._sync_roi_context_visibility()
         return layer
 
@@ -719,6 +735,45 @@ class SpectralViewerWidget(QWidget):
         except Exception as exc:
             self.status_label.setText(str(exc))
 
+    def _selected_spectral_layer(self):
+        spectral_layer_name = self.roi_image_combo.currentData()
+        if not spectral_layer_name:
+            raise ValueError("Choose an open spectral image first.")
+        spectral_layer = self._find_layer_by_name(str(spectral_layer_name))
+        if spectral_layer is None:
+            self._refresh_roi_image_combo()
+            raise ValueError("Selected spectral image is no longer open.")
+        return spectral_layer
+
+    def _prepare_roi_layer_for_spectral_layer(self, spectral_layer, *, activate_roi_layer: bool = False):
+        if self.roi_source_combo.currentText() == "Labels":
+            labels_layer = self._find_bound_labels_layer(spectral_layer.name)
+            if labels_layer is None:
+                raise ValueError(f"No bound labels layer exists for '{spectral_layer.name}'.")
+            self._bind_labels_layer_events(labels_layer)
+            self.viewer.layers.selection.active = spectral_layer
+            self._sync_roi_context_visibility()
+            self.status_label.setText(
+                f"Prepared labels ROI context for '{spectral_layer.name}'. Use the bound labels layer '{labels_layer.name}'."
+            )
+            return labels_layer
+
+        roi_layer = self._ensure_roi_shapes_layer(spectral_layer.name, activate=activate_roi_layer)
+        if not activate_roi_layer:
+            self.viewer.layers.selection.active = spectral_layer
+            self._sync_roi_context_visibility()
+        self.status_label.setText(
+            f"Prepared ROI layer '{roi_layer.name}' for '{spectral_layer.name}'. Select it in the layer list when you want to draw."
+        )
+        return roi_layer
+
+    def _prepare_selected_roi_layer(self):
+        try:
+            spectral_layer = self._selected_spectral_layer()
+            self._prepare_roi_layer_for_spectral_layer(spectral_layer, activate_roi_layer=False)
+        except Exception as exc:
+            self.status_label.setText(str(exc))
+
     def _prepare_all_roi_layers(self):
         try:
             spectral_layers = self._spectral_layers()
@@ -734,7 +789,7 @@ class SpectralViewerWidget(QWidget):
                     self._bind_labels_layer_events(labels_layer)
                     prepared_count += 1
                     continue
-                self._ensure_roi_shapes_layer(spectral_layer.name)
+                self._ensure_roi_shapes_layer(spectral_layer.name, activate=False)
                 prepared_count += 1
             if prepared_count == 0 and self.roi_source_combo.currentText() == "Labels":
                 self.status_label.setText("No labels layers are bound to the open spectral images yet.")
@@ -744,32 +799,12 @@ class SpectralViewerWidget(QWidget):
         except Exception as exc:
             self.status_label.setText(str(exc))
 
-    def _activate_selected_roi_layer(self):
+    def _focus_selected_roi_image(self):
         try:
-            spectral_layer_name = self.roi_image_combo.currentData()
-            if not spectral_layer_name:
-                self.status_label.setText("Choose an open spectral image first.")
-                return
-            spectral_layer = self._find_layer_by_name(spectral_layer_name)
-            if spectral_layer is None:
-                self.status_label.setText("Selected spectral image is no longer open.")
-                self._refresh_roi_image_combo()
-                return
-            if self.roi_source_combo.currentText() == "Labels":
-                labels_layer = self._find_bound_labels_layer(spectral_layer_name)
-                if labels_layer is None:
-                    self.viewer.layers.selection.active = spectral_layer
-                    self._sync_roi_context_visibility()
-                    self.status_label.setText(
-                        f"No bound labels layer exists for '{spectral_layer_name}'. Select the image and bind a labels layer first."
-                    )
-                    return
-                self.viewer.layers.selection.active = labels_layer
-                self._sync_roi_context_visibility()
-                self.status_label.setText(f"Activated bound labels layer '{labels_layer.name}'.")
-                return
-            roi_layer = self._ensure_roi_shapes_layer(spectral_layer_name)
-            self.status_label.setText(f"Activated ROI layer '{roi_layer.name}'.")
+            spectral_layer = self._selected_spectral_layer()
+            self.viewer.layers.selection.active = spectral_layer
+            self._sync_roi_context_visibility()
+            self.status_label.setText(f"Focused source image '{spectral_layer.name}'.")
         except Exception as exc:
             self.status_label.setText(str(exc))
 
@@ -1111,10 +1146,12 @@ class SpectralViewerWidget(QWidget):
         self.comparison_table.setHorizontalHeaderLabels(self.COMPARISON_COLUMNS)
         if not rows:
             self.plot_selected_comparison_button.setEnabled(False)
+            self.remove_selected_comparison_button.setEnabled(False)
             self.comparison_table.resizeColumnsToContents()
             return
 
         self.plot_selected_comparison_button.setEnabled(True)
+        self.remove_selected_comparison_button.setEnabled(True)
         for row_index, (dataset_index, trace_index, source_layer_name, trace_label, kind) in enumerate(rows):
             for column_index, column_name in enumerate(self.COMPARISON_COLUMNS):
                 if column_name == "plot":
@@ -1179,6 +1216,50 @@ class SpectralViewerWidget(QWidget):
         self.canvas.draw()
         self._last_plot_kind = "comparison"
         self.status_label.setText(f"Plotted {len(selected_rows)} selected trace(s) across stored ROI datasets.")
+
+    def _remove_selected_comparison_rows(self):
+        datasets = ROI_SPECTRUM_STORE.list_datasets()
+        if not datasets:
+            self.status_label.setText("No stored ROI datasets available to edit.")
+            return
+
+        selection_model = self.comparison_table.selectionModel()
+        if selection_model is None:
+            self.status_label.setText("Comparison-table selection is unavailable.")
+            return
+        selected_rows = sorted({index.row() for index in selection_model.selectedRows()})
+        if not selected_rows:
+            self.status_label.setText("Select one or more comparison-table rows to remove.")
+            return
+
+        removals: dict[int, dict[str, object]] = {}
+        for row_index in selected_rows:
+            item = self.comparison_table.item(row_index, 0)
+            if item is None:
+                continue
+            dataset_index, trace_index = item.data(Qt.UserRole)
+            entry = removals.setdefault(int(dataset_index), {"roi_indices": set(), "remove_pooled": False})
+            if trace_index is None:
+                entry["remove_pooled"] = True
+            else:
+                entry["roi_indices"].add(int(trace_index))
+
+        if not removals:
+            self.status_label.setText("No removable comparison rows were found.")
+            return
+
+        for dataset_index in sorted(removals, reverse=True):
+            entry = removals[dataset_index]
+            ROI_SPECTRUM_STORE.remove_dataset_rows(
+                dataset_index,
+                roi_indices=sorted(entry["roi_indices"]),
+                remove_pooled=bool(entry["remove_pooled"]),
+            )
+
+        self._refresh_dataset_combo()
+        self._refresh_comparison_table()
+        self._last_plot_kind = "roi"
+        self.status_label.setText(f"Removed {len(selected_rows)} ROI comparison row(s).")
 
     def _clear_plot(self):
         self.figure.clear()
@@ -1503,7 +1584,7 @@ class SpectralViewerWidget(QWidget):
                 roi_shapes_file = entry.get("roi_shapes_file")
                 if roi_shapes_file:
                     payload = json.loads((package_root / "roi_shapes" / roi_shapes_file).read_text(encoding="utf-8"))
-                    roi_layer = self._ensure_roi_shapes_layer(str(payload["source_layer_name"]))
+                    roi_layer = self._ensure_roi_shapes_layer(str(payload["source_layer_name"]), activate=False)
                     roi_layer.data = []
                     shapes = [np.asarray(shape, dtype=np.float32) for shape in payload.get("shapes", [])]
                     shape_types = list(payload.get("shape_types", []))

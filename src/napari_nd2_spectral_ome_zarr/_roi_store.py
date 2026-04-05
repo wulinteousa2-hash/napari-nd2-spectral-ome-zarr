@@ -148,6 +148,53 @@ class RoiSpectrumStore:
             del self._datasets[index]
         self._notify_listeners()
 
+    def remove_dataset_rows(
+        self,
+        index: int,
+        *,
+        roi_indices: list[int] | None = None,
+        remove_pooled: bool = False,
+    ):
+        dataset = self.get_dataset(index)
+        roi_index_set = {int(value) for value in (roi_indices or [])}
+        keep_indices = [row_index for row_index in range(len(dataset.roi_labels)) if row_index not in roi_index_set]
+
+        roi_labels = [dataset.roi_labels[row_index] for row_index in keep_indices]
+        roi_areas_px = np.asarray(dataset.roi_areas_px[keep_indices], dtype=np.float32)
+        roi_spectra = np.asarray(dataset.roi_spectra[keep_indices], dtype=np.float32)
+
+        pooled_spectrum = None if remove_pooled else dataset.pooled_spectrum
+        if pooled_spectrum is not None and roi_spectra.size > 0:
+            pooled_spectrum = np.mean(roi_spectra, axis=0)
+        elif roi_spectra.size == 0 and remove_pooled:
+            pooled_spectrum = None
+
+        if not roi_labels and pooled_spectrum is None:
+            self.remove_dataset(index)
+            return
+
+        self._datasets[index] = RoiSpectrumDataset(
+            dataset_id=dataset.dataset_id,
+            name=dataset.name,
+            source_layer_name=dataset.source_layer_name,
+            mode=dataset.mode,
+            wavelengths_nm=np.asarray(dataset.wavelengths_nm, dtype=np.float32).copy(),
+            roi_labels=roi_labels,
+            roi_areas_px=roi_areas_px.copy(),
+            roi_spectra=roi_spectra.copy(),
+            pooled_spectrum=None if pooled_spectrum is None else np.asarray(pooled_spectrum, dtype=np.float32).copy(),
+            animal_id=dataset.animal_id,
+            group_label=dataset.group_label,
+            genotype=dataset.genotype,
+            sex=dataset.sex,
+            age=dataset.age,
+            region=dataset.region,
+            batch=dataset.batch,
+            blind_id=dataset.blind_id,
+            created_at=datetime.now().isoformat(timespec="seconds"),
+        )
+        self._notify_listeners()
+
     def export_dataset_csv(self, index: int, output_path: str) -> Path:
         dataset = self.get_dataset(index)
         return _write_dataset_csv(dataset, output_path)

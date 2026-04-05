@@ -19,7 +19,7 @@ The plugin is organized as 3 subplugins:
 
 1. `ND2 Spectral Export`
 - convert single files or batches from ND2 to OME-Zarr
-- load single or batch OME-Zarr datasets
+- scan and open single or batch OME-Zarr datasets from the same workspace
 - validate image structure and dimensions such as axes order, shape, and wavelength metadata
 
 2. `Spectral Viewer`
@@ -83,35 +83,27 @@ All 3 widgets are configured to float by default instead of staying docked in th
 
 `ND2 Spectral Export` now handles:
 
-- single ND2 preview
-- batch ND2 to OME-Zarr export
-- single OME-Zarr loading
-- batch OME-Zarr loading from a parent folder
+- ND2-to-OME-Zarr conversion from a dropped single file, subfolder, or parent folder
+- recursive batch ND2 conversion while preserving the original relative folder structure
+- root-level `manifest.json` export logging for converted datasets
+- OME-Zarr scanning and opening from the same widget
+- per-file conversion status, progress, and failure reporting in the shared table
+- conversion error collection in a dedicated troubleshooting panel
 
-### Single Zarr loading
+### OME-Zarr scanning and opening
 
-The widget supports drag-and-drop or browsing for one `.zarr` folder.
+The widget supports drag-and-drop or browsing for:
 
-Before opening, it shows:
+- one `.zarr` folder
+- one parent folder containing many `.zarr` datasets
 
-- dataset name
-- axes
-- full-resolution shape
-- preview shape
-- whether the dataset is spectral
-- wavelength count and wavelength range
-
-The user can choose which views to open:
+The user can choose which views to open for selected Zarr datasets:
 
 - `Visible sum`
 - `Truecolor`
 - `Raw spectral`
 
 It also supports `Use preview pyramid level` for the display layers.
-
-### Batch Zarr loading
-
-The widget also supports scanning one parent folder recursively for `.zarr` datasets, including nested subfolders.
 
 The batch table shows:
 
@@ -128,12 +120,30 @@ The batch table shows:
 
 The user can:
 
-- browse to a root folder
-- scan recursively for `.zarr` datasets
-- select all or clear all
-- open only the checked datasets
+- browse or drag a Zarr source
+- click the prominent `Scan Zarr Folder` action between the source box and the table
+- select one row, multiple rows, or use `Select All` / `Clear All`
+- press `Space` to toggle the selected Zarr rows
+- open only the selected or checked datasets with `Open Selected Zarr`
 
 The chosen `Visible sum`, `Truecolor`, `Raw spectral`, and preview options are applied to all selected Zarr datasets in the batch open action.
+
+### ND2 conversion behavior
+
+The ND2 conversion area now uses:
+
+- `ND2 source`
+- `OME-Zarr output`
+- `Convert To OME-Zarr`
+
+Conversion status is shown with:
+
+- a fixed `Status:` message bar
+- a progress bar
+- a shared table listing queued ND2 files, converted outputs, and failures
+- a `Conversion Errors` panel for troubleshooting failed files
+
+If one ND2 file fails, the widget continues converting the remaining files and records the failed file in the error panel instead of aborting the whole batch.
 
 ### Reader popup note
 
@@ -186,12 +196,12 @@ This keeps ROI editing, cross-image comparison, and pseudocolor generation separ
 ### Recommended step-by-step use
 
 1. Select a spectral image layer.
-2. Click `Prepare ROI Layers`.
-3. Use `ROI image` and `Activate ROI Layer` if you need to jump directly to a specific image's ROI layer.
+2. Click `Prepare Selected ROI` for the current image, or `Prepare ROI Layers` if you want to prepare every open spectral image.
+3. Use `ROI image` and `Find Image` if you need to jump back to a specific source image quickly.
 4. Draw ROIs for that image only.
 5. `ROI Spectrum` updates for the active image and the plugin stores that image's ROI spectra in memory as a dataset.
 6. Move to the next image.
-7. Activate that image's ROI layer.
+7. Prepare that image's ROI context and draw a fresh set of ROIs.
 8. Draw a fresh set of ROIs starting from `ROI 1`.
 
 If you want to redraw for the current image, click `Clear Active ROI`. That clears only the active image's ROI shapes and restarts numbering from `ROI 1`.
@@ -217,6 +227,7 @@ The active ROI plot now responds immediately when these controls change:
 - Use `Refresh All ROI Datasets` to update stored datasets from all open spectral images
 - The comparison table lists ROI traces and pooled traces from all stored datasets
 - Use `Plot Selected Across Images` to display selected traces from multiple source images on the same axes
+- Use `Remove Selected Rows` to delete unneeded ROI or pooled entries from stored datasets
 
 `Normalized` / `Absolute` now affects both the active ROI plot and the across-images comparison plot. Raw spectra are stored in memory and normalization is applied only at display time.
 
@@ -446,7 +457,7 @@ these workflows accessible within OME-Zarr-compatible environments.
 
 - If `.zarr` files are opened through napari's generic file-open dialog, napari may still show a `Choose reader` popup when multiple readers claim `.zarr`. Use the plugin's own Zarr loader to avoid that workflow.
 - ROI datasets are stored in memory for the current napari session and should be exported if they need to survive a full application restart.
-- napari `Shapes` rendering can be sensitive in some environments. The plugin uses separate ROI label layers to reduce instability, but behavior can still depend on upstream napari and vispy rendering.
+- napari `Shapes` rendering can still be sensitive in some environments, so ROI display behavior may depend on upstream napari and vispy rendering details.
 
 
 ## Citation

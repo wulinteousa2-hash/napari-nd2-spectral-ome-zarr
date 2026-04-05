@@ -14,7 +14,7 @@ contributions:
       python_name: napari_nd2_spectral_ome_zarr._reader:napari_get_reader
 
     - id: napari-nd2-spectral-ome-zarr.widget
-      title: ND2 Spectral OME-Zarr Exporter
+      title: ND2 Spectral Export
       python_name: napari_nd2_spectral_ome_zarr._widget:Nd2SpectralWidget
 
     - id: napari-nd2-spectral-ome-zarr.spectral_viewer
