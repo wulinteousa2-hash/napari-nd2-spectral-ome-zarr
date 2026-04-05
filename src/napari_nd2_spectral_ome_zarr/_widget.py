@@ -6,7 +6,7 @@ from datetime import datetime
 from pathlib import Path
 from concurrent.futures import ProcessPoolExecutor, as_completed
 
-from qtpy.QtCore import QObject, Qt, QThread, QTimer, Signal
+from qtpy.QtCore import QObject, QSize, Qt, QThread, QTimer, Signal
 from qtpy.QtGui import QColor, QFontMetrics, QPalette
 from qtpy.QtWidgets import (
     QAbstractItemView,
@@ -323,6 +323,7 @@ class Nd2SpectralWidget(QWidget):
         self.zarr_batch_table = SelectableTableWidget()
         self.zarr_batch_table.setAlternatingRowColors(False)
         self.zarr_batch_table.setMinimumHeight(320)
+        self.zarr_batch_table.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
         self.zarr_batch_table.setSelectionBehavior(QAbstractItemView.SelectRows)
         self.zarr_batch_table.setSelectionMode(QAbstractItemView.ExtendedSelection)
         self.zarr_batch_table.setStyleSheet(
@@ -351,6 +352,9 @@ class Nd2SpectralWidget(QWidget):
         self.export_progress_bar.setFormat("Idle")
         self.export_error_log = QPlainTextEdit()
         self.export_error_log.setReadOnly(True)
+        self.export_error_log.setMinimumHeight(72)
+        self.export_error_log.setMaximumHeight(96)
+        self.export_error_log.setSizePolicy(QSizePolicy.Preferred, QSizePolicy.Fixed)
         self.export_error_log.setPlaceholderText("Conversion failures will appear here for troubleshooting.")
         self._configure_zarr_batch_table_palette()
         self._update_gpu_indicator()
@@ -392,6 +396,7 @@ class Nd2SpectralWidget(QWidget):
 
         layout = QVBoxLayout()
         export_group = QGroupBox("ND2 Spectral Export")
+        export_group.setSizePolicy(QSizePolicy.Preferred, QSizePolicy.Expanding)
         export_layout = QVBoxLayout()
         export_layout.addWidget(self.status_label)
         export_layout.addWidget(self.export_progress_bar)
@@ -429,7 +434,7 @@ class Nd2SpectralWidget(QWidget):
         zarr_batch_actions.addWidget(self.clear_all_zarr_button)
         zarr_batch_actions.addWidget(self.open_selected_zarr_button)
         export_layout.addLayout(zarr_batch_actions)
-        export_layout.addWidget(self.zarr_batch_table)
+        export_layout.addWidget(self.zarr_batch_table, 1)
 
         gpu_row = QHBoxLayout()
         gpu_row.addWidget(self.gpu_checkbox)
@@ -439,15 +444,16 @@ class Nd2SpectralWidget(QWidget):
         export_layout.addWidget(QLabel("Batch worker count"))
         export_layout.addWidget(self.worker_count_edit)
         error_group = QGroupBox("Conversion Errors")
+        error_group.setSizePolicy(QSizePolicy.Preferred, QSizePolicy.Fixed)
         error_layout = QVBoxLayout()
         error_layout.addWidget(self.export_error_log)
         error_group.setLayout(error_layout)
         export_layout.addWidget(error_group)
         export_group.setLayout(export_layout)
-        layout.addWidget(export_group)
+        layout.addWidget(export_group, 1)
         self.setLayout(layout)
         self._update_status_label()
-        float_parent_dock_later(self)
+        float_parent_dock_later(self, minimum_size=QSize(720, 560))
 
     def _default_worker_count(self) -> int:
         cpu = os.cpu_count() or 4

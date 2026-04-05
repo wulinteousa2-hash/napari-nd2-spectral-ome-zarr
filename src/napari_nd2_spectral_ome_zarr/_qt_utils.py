@@ -1,14 +1,19 @@
 from __future__ import annotations
 
-from qtpy.QtCore import QTimer, Qt
+from qtpy.QtCore import QSize, QTimer, Qt
 from qtpy.QtWidgets import QDockWidget, QWidget
 
 
-def float_parent_dock_later(widget: QWidget, attempts: int = 10, delay_ms: int = 50) -> None:
+def float_parent_dock_later(
+    widget: QWidget,
+    attempts: int = 10,
+    delay_ms: int = 50,
+    minimum_size: QSize | None = None,
+) -> None:
     def _try_float(remaining: int):
         dock_widget = _find_parent_dock(widget)
         if dock_widget is not None:
-            _configure_floating_dock(dock_widget)
+            _configure_floating_dock(dock_widget, minimum_size=minimum_size)
             if dock_widget.isFloating():
                 return
         if remaining > 0:
@@ -26,7 +31,7 @@ def _find_parent_dock(widget: QWidget) -> QDockWidget | None:
     return None
 
 
-def _configure_floating_dock(dock_widget: QDockWidget) -> None:
+def _configure_floating_dock(dock_widget: QDockWidget, minimum_size: QSize | None = None) -> None:
     dock_widget.setAllowedAreas(Qt.AllDockWidgetAreas)
     dock_widget.setFeatures(
         QDockWidget.DockWidgetClosable
@@ -34,7 +39,8 @@ def _configure_floating_dock(dock_widget: QDockWidget) -> None:
         | QDockWidget.DockWidgetFloatable
     )
     dock_widget.setFloating(True)
-    dock_widget.setMinimumSize(720, 480)
+    dock_minimum_size = minimum_size or QSize(720, 480)
+    dock_widget.setMinimumSize(dock_minimum_size)
     dock_widget.resize(dock_widget.size().expandedTo(dock_widget.minimumSize()))
     dock_widget.show()
     dock_widget.raise_()

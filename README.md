@@ -57,6 +57,20 @@ pip install -e .
 
 Then start napari and open the plugin widgets from the Plugins menu.
 
+## Interface Preview
+
+The screenshot below shows the main `ND2 Spectral Export` workflow used for conversion and OME-Zarr loading.
+
+![ND2 Spectral Export workflow](docs/nd2_spectral_export_workflow.png)
+
+Highlighted areas:
+
+1. The conversion section defines the `ND2 source` and `OME-Zarr output` used for ND2-to-OME-Zarr export.
+2. `Scan Zarr Folder` is used to browse and discover converted OME-Zarr datasets.
+3. The table lists dataset properties such as file name, relative path, axes, shape, preview shape, wavelength range, and spectral status.
+
+Additional screenshots and supporting project assets can be stored and referenced from [`docs/`](docs/).
+
 ## Intended users
 
 This plugin is designed for researchers working with spectral fluorescence

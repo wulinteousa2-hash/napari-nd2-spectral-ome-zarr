@@ -4,6 +4,18 @@
 
 - No unreleased changes yet.
 
+## 1.3.1 - 2026-04-05
+
+### README
+
+- Added an interface preview screenshot for the `ND2 Spectral Export` workflow.
+- Documented the highlighted conversion, Zarr browsing, and dataset-property table regions in the screenshot.
+
+### ND2 Spectral Export
+
+- Increased the default floating height of the `ND2 Spectral Export` window.
+- Fixed the export layout so the bottom controls stay anchored while the dataset table expands to show more rows.
+
 ## 1.3.0 - 2026-04-05
 
 ### ND2 Spectral Export
