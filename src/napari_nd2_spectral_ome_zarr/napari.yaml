@@ -25,6 +25,10 @@ contributions:
       title: Spectral Analysis
       python_name: napari_nd2_spectral_ome_zarr._spectral_analysis:SpectralAnalysisWidget
 
+    - id: napari-nd2-spectral-ome-zarr.spatial_ratio_analysis
+      title: Spatial Ratio Analysis
+      python_name: napari_nd2_spectral_ome_zarr._spatial_ratio_analysis:SpatialRatioAnalysisWidget
+
   readers:
     - command: napari-nd2-spectral-ome-zarr.get_reader
       accepts_directories: true
@@ -42,6 +46,9 @@ contributions:
 
     - command: napari-nd2-spectral-ome-zarr.spectral_analysis
       display_name: Spectral Analysis
+
+    - command: napari-nd2-spectral-ome-zarr.spatial_ratio_analysis
+      display_name: Spatial Ratio Analysis
 
 citation: |
   The spectral analysis functionality implemented in this plugin follows the

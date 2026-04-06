@@ -3,8 +3,8 @@
 This napari plugin supports spectral fluorescence imaging workflows for
 solvatochromic dye analysis (e.g., Nile Red) across the visible emission
 range (~400–740 nm). It provides ND2-to-OME-Zarr conversion, ROI-based
-spectral extraction, emission-ratio analysis, and aggregation from ROI
-to image-level and animal-level datasets.
+spectral extraction, kernel-based spatial ratio analysis, emission-ratio
+analysis, and aggregation from ROI to image-level and animal-level datasets.
 
 ## Supported microscopy systems
 
@@ -15,7 +15,7 @@ Tested with spectral ND2 datasets generated from:
 
 ## Plugin Overview
 
-The plugin is organized as 3 subplugins:
+The plugin is organized as 4 subplugins:
 
 1. `ND2 Spectral Export`
 - convert single files or batches from ND2 to OME-Zarr
@@ -34,6 +34,12 @@ The plugin is organized as 3 subplugins:
 - support Student's t-test and one-way or two-way ANOVA
 - support blind-group analysis using PCA, feature comparison, user-selected clustering, and p-value statistics
 
+4. `Spatial Ratio Analysis`
+- compute kernel-based spatial ratio measurements within prepared ROI contexts
+- support shape-only, labels-only, or shape-refined-by-label kernel analysis
+- export raw kernel tables and summary tables to CSV
+- send spatial-ratio summaries into the shared analysis dataset store for downstream statistics
+
 Features:
 
 - Read `.nd2` files into napari
@@ -44,6 +50,7 @@ Features:
 - Keep per-image ROI spectral datasets in memory during the napari session
 - Export stored ROI datasets and analysis tables to CSV
 - Run split-wavelength Nile Red ratio analysis, aggregation, and group comparison in a dedicated analysis panel
+- Run kernel-based spatial ratio analysis with optional blank subtraction and exportable summary tables
 
 The plugin is designed around 2D spectral images and keeps `T`, `C`, `Z`, `Y`, `X` axis semantics explicit during export.
 
@@ -85,13 +92,14 @@ for myelin physicochemical analysis. It supports workflows involving:
 
 ## Dock Widgets
 
-The plugin now exposes 3 napari dock widgets:
+The plugin now exposes 4 napari dock widgets:
 
 - `ND2 Spectral Export`
 - `Spectral Viewer`
 - `Spectral Analysis`
+- `Spatial Ratio Analysis`
 
-All 3 widgets are configured to float by default instead of staying docked in the main napari window.
+All 4 widgets are configured to float by default instead of staying docked in the main napari window.
 
 ## ND2 Spectral Export Workflow
 
@@ -234,14 +242,28 @@ The active ROI plot now responds immediately when these controls change:
 
 `Plot pooled ROI mean` is off by default and can be enabled only when needed.
 
+### ROI and labels workflows
+
+`Spectral Viewer` now supports three ROI measurement modes per image context:
+
+- shapes only
+- labels only
+- shapes refined by a bound labels layer
+
+When both shapes and labels are present, the labels are used to split each shape into label-specific ROI measurements. If no shapes exist, a bound labels layer can still drive labels-only measurement for the full image context.
+
+Blank subtraction is also available during ROI spectrum measurement by choosing a different spectral image as the blank reference.
+
 ### ROI comparison across images
 
-`ROI Comparison` is intended for cross-image plotting after ROI datasets have been stored.
+`ROI Comparison` is intended for cross-image plotting and curation after ROI datasets have been stored.
 
 - Use `Refresh All ROI Datasets` to update stored datasets from all open spectral images
-- The comparison table lists ROI traces and pooled traces from all stored datasets
-- Use `Plot Selected Across Images` to display selected traces from multiple source images on the same axes
-- Use `Remove Selected Rows` to delete unneeded ROI or pooled entries from stored datasets
+- The curation table lists ROI traces and pooled traces from all stored datasets
+- Use the `use` checkbox to include or exclude datasets from downstream analysis without deleting them
+- Edit metadata fields such as `group_label`, `animal_id`, `sex`, `age`, `region`, and `roi_class` directly in the table
+- Use `Plot Selected Across Images` to display checked traces from multiple source images on the same axes
+- Use `Remove Selected Rows` to reject unneeded ROI or pooled entries from stored datasets
 
 `Normalized` / `Absolute` now affects both the active ROI plot and the across-images comparison plot. Raw spectra are stored in memory and normalization is applied only at display time.
 
@@ -306,6 +328,8 @@ The report view is designed to behave more like a statistics console than a sing
 
 The `Stored ROI Datasets` table lets you annotate each captured dataset with:
 
+- `trace_kind`
+- `trace_label`
 - `animal_id`
 - `group_label`
 - `genotype`
@@ -314,6 +338,7 @@ The `Stored ROI Datasets` table lets you annotate each captured dataset with:
 - `region`
 - `batch`
 - `blind_id`
+- `roi_class`
 
 This supports experiments such as:
 
@@ -326,6 +351,7 @@ This supports experiments such as:
 
 Analysis no longer uses every stored dataset automatically.
 
+- Use the `Measurement` selector to switch between `spectral_mean` and `spatial_ratio` datasets
 - Use the `use_for_analysis` checkbox column to choose which dataset IDs are included
 - Click `Compute Spectral Analysis` to analyze only the checked datasets
 - Click `Remove Selected Datasets` to delete all checked datasets from memory
@@ -412,6 +438,7 @@ The two-group workflow uses a selectable factor:
 - `age`
 - `region`
 - `batch`
+- `roi_class`
 
 The Welch t-test runs only when the selected factor contains exactly two non-empty groups with at least two values each.
 
@@ -447,6 +474,29 @@ Supported output formats:
 - plain text
 - CSV
 
+## Spatial Ratio Analysis Workflow
+
+`Spatial Ratio Analysis` is intended for kernel-based emission-ratio measurements inside prepared image ROI contexts.
+
+The widget supports:
+
+- a per-image context table showing the current spectral image, ROI layer, bound labels layer, measurement mode, ROI count, and readiness status
+- configurable kernel size, minimum valid coverage, split wavelength, ratio mode, optional normalization, and optional blank subtraction
+- scatter-based selection of kernel subsets after computation
+- raw-kernel CSV export, summary CSV export, and `Send Summary To Analysis`
+
+### Recommended spatial-ratio flow
+
+1. Open one or more spectral images in napari.
+2. Prepare ROI context for the image you want to analyze.
+3. Draw shapes, bind labels, or use both when you want label-refined measurements inside each shape.
+4. Open `Spatial Ratio Analysis` and select the target image row in `Image ROI Context`.
+5. Set kernel size, minimum coverage, split wavelength, and ratio mode.
+6. Optionally enable normalization or choose a blank reference image.
+7. Click `Compute Spatial Ratio`.
+8. Review the kernel summary table and scatter plot.
+9. Export raw or summary CSV output, or use `Send Summary To Analysis` for downstream statistics.
+
 ### Recommended experiment flow
 
 1. Open spectral images in napari.
@@ -455,10 +505,11 @@ Supported output formats:
 4. Repeat for image 2, image 3, and so on.
 5. Open `Spectral Analysis`.
 6. Enter metadata for each stored dataset.
-7. Check only the dataset IDs you want to compare.
-8. Set the wavelength split point.
-9. Compute the analysis.
-10. Export ROI, image, or animal summary CSV files as needed.
+7. Choose the measurement type you want to analyze.
+8. Check only the dataset IDs you want to compare.
+9. Set the wavelength split point.
+10. Compute the analysis.
+11. Export ROI, image, or animal summary CSV files as needed.
 
 ## Reproducibility note
 
@@ -471,6 +522,7 @@ these workflows accessible within OME-Zarr-compatible environments.
 
 - If `.zarr` files are opened through napari's generic file-open dialog, napari may still show a `Choose reader` popup when multiple readers claim `.zarr`. Use the plugin's own Zarr loader to avoid that workflow.
 - ROI datasets are stored in memory for the current napari session and should be exported if they need to survive a full application restart.
+- Spatial-ratio summaries sent into the shared dataset store are session-scoped unless exported or saved through a broader workflow.
 - napari `Shapes` rendering can still be sensitive in some environments, so ROI display behavior may depend on upstream napari and vispy rendering details.
 
 

@@ -36,6 +36,8 @@ class SpectralAnalysisWidget(QWidget):
         ("dataset_id", False),
         ("name", False),
         ("source_layer_name", False),
+        ("trace_kind", False),
+        ("trace_label", False),
         ("animal_id", True),
         ("group_label", True),
         ("genotype", True),
@@ -44,6 +46,7 @@ class SpectralAnalysisWidget(QWidget):
         ("region", True),
         ("batch", True),
         ("blind_id", True),
+        ("roi_class", True),
         ("roi_count", False),
         ("created_at", False),
     ]
@@ -56,18 +59,19 @@ class SpectralAnalysisWidget(QWidget):
         self._animal_rows: list[dict] = []
         self._animal_spectra: list[np.ndarray] = []
         self._updating_dataset_table = False
-        self._selected_dataset_ids: set[str] = set()
 
         self.split_edit = QLineEdit("600")
         self.ratio_mode_combo = QComboBox()
         self.ratio_mode_combo.addItems(["sum_above_over_below", "mean_above_over_below", "log10_sum_ratio"])
+        self.measurement_combo = QComboBox()
+        self.measurement_combo.addItems(["spectral_mean", "spatial_ratio"])
         self.level_combo = QComboBox()
-        self.level_combo.addItems(["Animal", "Image", "ROI"])
+        self.level_combo.addItems(["ROI", "Image", "Animal"])
         self.normalize_checkbox = QCheckBox("Normalize before ratio")
         self.significance_edit = QLineEdit("0.05")
         self.confidence_edit = QLineEdit("95")
         self.stats_factor_combo = QComboBox()
-        self.stats_factor_combo.addItems(["group_label", "genotype", "sex", "age", "region", "batch"])
+        self.stats_factor_combo.addItems(["group_label", "genotype", "sex", "age", "region", "batch", "roi_class"])
 
         self.refresh_button = QPushButton("Refresh Datasets")
         self.refresh_button.clicked.connect(self._refresh_dataset_table)
@@ -78,11 +82,11 @@ class SpectralAnalysisWidget(QWidget):
         self.remove_current_button = QPushButton("Remove Current Row")
         self.remove_current_button.clicked.connect(self._remove_current_dataset)
         self.ttest_factor_combo = QComboBox()
-        self.ttest_factor_combo.addItems(["group_label", "genotype", "sex", "age", "region", "batch"])
+        self.ttest_factor_combo.addItems(["group_label", "genotype", "sex", "age", "region", "batch", "roi_class"])
         self.ttest_button = QPushButton("Two-Group Welch t-test")
         self.ttest_button.clicked.connect(self._run_ttest)
         self.anova_factor_combo = QComboBox()
-        self.anova_factor_combo.addItems(["group_label", "genotype", "sex", "age", "region", "batch"])
+        self.anova_factor_combo.addItems(["group_label", "genotype", "sex", "age", "region", "batch", "roi_class"])
         self.anova_button = QPushButton("One-way ANOVA")
         self.anova_button.clicked.connect(self._run_anova)
         self.blind_k_combo = QComboBox()
@@ -135,6 +139,8 @@ class SpectralAnalysisWidget(QWidget):
         top_controls.addWidget(self.split_edit)
         top_controls.addWidget(QLabel("Ratio mode"))
         top_controls.addWidget(self.ratio_mode_combo)
+        top_controls.addWidget(QLabel("Measurement"))
+        top_controls.addWidget(self.measurement_combo)
         top_controls.addWidget(QLabel("Stats level"))
         top_controls.addWidget(self.level_combo)
         top_controls.addWidget(self.normalize_checkbox)
@@ -199,6 +205,7 @@ class SpectralAnalysisWidget(QWidget):
         self._refresh_dataset_table()
         self._refresh_correlation_field_combos()
         self.level_combo.currentTextChanged.connect(lambda _text: self._refresh_correlation_field_combos())
+        self.measurement_combo.currentTextChanged.connect(lambda _text: self._refresh_dataset_table())
         float_parent_dock_later(self)
 
     def closeEvent(self, event):
@@ -226,23 +233,25 @@ class SpectralAnalysisWidget(QWidget):
         self._refresh_dataset_table()
 
     def _refresh_dataset_table(self):
-        datasets = ROI_SPECTRUM_STORE.list_datasets()
-        if not self._selected_dataset_ids:
-            self._selected_dataset_ids = {dataset.dataset_id for dataset in datasets}
-        else:
-            valid_ids = {dataset.dataset_id for dataset in datasets}
-            self._selected_dataset_ids &= valid_ids
+        selected_measurement = self.measurement_combo.currentText()
+        datasets = [
+            (index, dataset)
+            for index, dataset in enumerate(ROI_SPECTRUM_STORE.list_datasets())
+            if dataset.measurement_kind == selected_measurement
+        ]
         self._updating_dataset_table = True
         self.dataset_table.clear()
         self.dataset_table.setColumnCount(len(self.DATASET_COLUMNS))
         self.dataset_table.setHorizontalHeaderLabels([column for column, _editable in self.DATASET_COLUMNS])
         self.dataset_table.setRowCount(len(datasets))
-        for row_index, dataset in enumerate(datasets):
+        for row_index, (store_index, dataset) in enumerate(datasets):
             values = {
-                "use_for_analysis": dataset.dataset_id in self._selected_dataset_ids,
+                "use_for_analysis": dataset.use_for_analysis,
                 "dataset_id": dataset.dataset_id,
                 "name": dataset.name,
                 "source_layer_name": dataset.source_layer_name,
+                "trace_kind": dataset.trace_kind,
+                "trace_label": dataset.trace_label,
                 "animal_id": dataset.animal_id,
                 "group_label": dataset.group_label,
                 "genotype": dataset.genotype,
@@ -251,7 +260,8 @@ class SpectralAnalysisWidget(QWidget):
                 "region": dataset.region,
                 "batch": dataset.batch,
                 "blind_id": dataset.blind_id,
-                "roi_count": str(len(dataset.roi_labels)),
+                "roi_class": dataset.roi_class,
+                "roi_count": str(dataset.roi_count or len(dataset.roi_labels)),
                 "created_at": dataset.created_at,
             }
             for column_index, (column_name, editable) in enumerate(self.DATASET_COLUMNS):
@@ -260,7 +270,7 @@ class SpectralAnalysisWidget(QWidget):
                     item.setCheckState(Qt.Checked if values[column_name] else Qt.Unchecked)
                 else:
                     item = QTableWidgetItem(str(values[column_name]))
-                item.setData(Qt.UserRole, row_index)
+                    item.setData(Qt.UserRole, store_index)
                 if column_name == "use_for_analysis":
                     item.setFlags((item.flags() | Qt.ItemIsUserCheckable | Qt.ItemIsEnabled) & ~Qt.ItemIsEditable)
                 elif not editable:
@@ -278,20 +288,17 @@ class SpectralAnalysisWidget(QWidget):
         if item is None:
             return
         dataset_index = item.data(Qt.UserRole)
-        dataset = ROI_SPECTRUM_STORE.get_dataset(dataset_index)
         if column_name == "use_for_analysis":
-            if item.checkState() == Qt.Checked:
-                self._selected_dataset_ids.add(dataset.dataset_id)
-            else:
-                self._selected_dataset_ids.discard(dataset.dataset_id)
+            ROI_SPECTRUM_STORE.update_metadata(dataset_index, use_for_analysis=item.checkState() == Qt.Checked)
             return
         if not editable:
             return
         ROI_SPECTRUM_STORE.update_metadata(dataset_index, **{column_name: item.text().strip()})
 
     def _selected_datasets(self):
-        datasets = ROI_SPECTRUM_STORE.list_datasets()
-        return [dataset for dataset in datasets if dataset.dataset_id in self._selected_dataset_ids]
+        selected_measurement = self.measurement_combo.currentText()
+        datasets = [dataset for dataset in ROI_SPECTRUM_STORE.list_datasets() if dataset.measurement_kind == selected_measurement]
+        return [dataset for dataset in datasets if dataset.use_for_analysis and dataset.accepted]
 
     def _split_value(self) -> float:
         return float(self.split_edit.text().strip())
@@ -323,6 +330,9 @@ class SpectralAnalysisWidget(QWidget):
         if not datasets:
             self.stats_report.setPlainText("No selected ROI datasets available.")
             return
+        if self.measurement_combo.currentText() == "spatial_ratio":
+            self._compute_spatial_summary_analysis(datasets)
+            return
         try:
             split_nm = self._split_value()
         except ValueError:
@@ -350,12 +360,17 @@ class SpectralAnalysisWidget(QWidget):
                         "region": dataset.region,
                         "batch": dataset.batch,
                         "blind_id": dataset.blind_id,
+                        "roi_class": dataset.roi_class,
                         "roi_label": roi_label,
                         "ratio": ratio,
                     }
                 )
 
-            pooled_spectrum = np.mean(np.asarray(dataset.roi_spectra, dtype=np.float32), axis=0)
+            pooled_spectrum = (
+                np.asarray(dataset.pooled_spectrum, dtype=np.float32)
+                if dataset.pooled_spectrum is not None
+                else np.mean(np.asarray(dataset.roi_spectra, dtype=np.float32), axis=0)
+            )
             image_mean_ratio = float(np.mean(roi_ratios)) if roi_ratios else np.nan
             image_rows.append(
                 {
@@ -370,6 +385,7 @@ class SpectralAnalysisWidget(QWidget):
                     "region": dataset.region,
                     "batch": dataset.batch,
                     "blind_id": dataset.blind_id,
+                    "roi_class": dataset.roi_class,
                     "n_roi": len(roi_ratios),
                     "mean_ratio": image_mean_ratio,
                 }
@@ -387,6 +403,7 @@ class SpectralAnalysisWidget(QWidget):
                     "region": dataset.region,
                     "batch": dataset.batch,
                     "blind_id": dataset.blind_id,
+                    "roi_class": dataset.roi_class,
                     "image_names": [],
                     "image_ratios": [],
                     "roi_ratios": [],
@@ -413,6 +430,7 @@ class SpectralAnalysisWidget(QWidget):
                     "region": entry["region"],
                     "batch": entry["batch"],
                     "blind_id": entry["blind_id"],
+                    "roi_class": entry["roi_class"],
                     "n_images": len(entry["image_names"]),
                     "n_rois": len(entry["roi_ratios"]),
                     "mean_ratio": float(np.mean(entry["image_ratios"])) if entry["image_ratios"] else np.nan,
@@ -433,14 +451,111 @@ class SpectralAnalysisWidget(QWidget):
             f"{len(image_rows)} image set(s), and {len(animal_rows)} animal aggregate(s) from {len(datasets)} selected dataset(s)."
         )
 
+    def _compute_spatial_summary_analysis(self, datasets):
+        roi_rows = []
+        image_rows = []
+        animal_groups: dict[str, dict] = {}
+        for dataset in datasets:
+            base_row = {
+                "dataset_id": dataset.dataset_id,
+                "image_name": dataset.name,
+                "source_layer": dataset.source_layer_name,
+                "animal_id": dataset.animal_id,
+                "group_label": dataset.group_label,
+                "genotype": dataset.genotype,
+                "sex": dataset.sex,
+                "age": dataset.age,
+                "region": dataset.region,
+                "batch": dataset.batch,
+                "blind_id": dataset.blind_id,
+                "roi_class": dataset.roi_class,
+                "kernel_size": dataset.kernel_size,
+                "split_nm": dataset.split_nm,
+                "n_kernels": dataset.n_kernels,
+                "mean_ratio": dataset.mean_ratio,
+                "median_ratio": dataset.median_ratio,
+                "sd_ratio": dataset.sd_ratio,
+                "mean_intensity": dataset.mean_intensity,
+            }
+            if dataset.analysis_level == "roi":
+                roi_rows.append(
+                    {
+                        **base_row,
+                        "roi_label": dataset.trace_label or (dataset.roi_labels[0] if dataset.roi_labels else "ROI"),
+                        "ratio": dataset.mean_ratio,
+                    }
+                )
+            elif dataset.analysis_level == "image":
+                image_rows.append(base_row)
+                animal_key = dataset.animal_id.strip() or dataset.source_layer_name
+                entry = animal_groups.setdefault(
+                    animal_key,
+                    {
+                        "animal_id": animal_key,
+                        "group_label": dataset.group_label,
+                        "genotype": dataset.genotype,
+                        "sex": dataset.sex,
+                        "age": dataset.age,
+                        "region": dataset.region,
+                        "batch": dataset.batch,
+                        "blind_id": dataset.blind_id,
+                        "roi_class": dataset.roi_class,
+                        "image_ratios": [],
+                        "image_intensities": [],
+                        "n_kernels": 0,
+                        "kernel_size": dataset.kernel_size,
+                        "split_nm": dataset.split_nm,
+                    },
+                )
+                entry["image_ratios"].append(float(dataset.mean_ratio))
+                entry["image_intensities"].append(float(dataset.mean_intensity))
+                entry["n_kernels"] += int(dataset.n_kernels)
+
+        animal_rows = []
+        for animal_key, entry in animal_groups.items():
+            ratios = np.asarray(entry["image_ratios"], dtype=np.float32)
+            intensities = np.asarray(entry["image_intensities"], dtype=np.float32)
+            animal_rows.append(
+                {
+                    "animal_id": animal_key,
+                    "group_label": entry["group_label"],
+                    "genotype": entry["genotype"],
+                    "sex": entry["sex"],
+                    "age": entry["age"],
+                    "region": entry["region"],
+                    "batch": entry["batch"],
+                    "blind_id": entry["blind_id"],
+                    "roi_class": entry["roi_class"],
+                    "kernel_size": entry["kernel_size"],
+                    "split_nm": entry["split_nm"],
+                    "n_images": len(ratios),
+                    "n_kernels": int(entry["n_kernels"]),
+                    "mean_ratio": float(np.mean(ratios)) if ratios.size else np.nan,
+                    "median_ratio": float(np.median(ratios)) if ratios.size else np.nan,
+                    "sd_ratio": float(np.std(ratios, ddof=1)) if ratios.size > 1 else 0.0,
+                    "mean_intensity": float(np.mean(intensities)) if intensities.size else np.nan,
+                }
+            )
+
+        self._roi_rows = roi_rows
+        self._image_rows = image_rows
+        self._animal_rows = animal_rows
+        self._animal_spectra = []
+        self._populate_table(self.roi_table, roi_rows)
+        self._populate_table(self.image_table, image_rows)
+        self._populate_table(self.animal_table, animal_rows)
+        self._refresh_correlation_field_combos()
+        self.stats_report.setPlainText(
+            f"Loaded spatial-ratio summaries for {len(roi_rows)} ROI row(s), {len(image_rows)} image row(s), and {len(animal_rows)} animal aggregate(s)."
+        )
+
     def _remove_selected_datasets(self):
         datasets = ROI_SPECTRUM_STORE.list_datasets()
-        indices = [index for index, dataset in enumerate(datasets) if dataset.dataset_id in self._selected_dataset_ids]
+        indices = [index for index, dataset in enumerate(datasets) if dataset.use_for_analysis]
         if not indices:
             self.stats_report.setPlainText("No selected datasets to remove.")
             return
         ROI_SPECTRUM_STORE.remove_datasets(indices)
-        self._selected_dataset_ids.clear()
         self._roi_rows = []
         self._image_rows = []
         self._animal_rows = []
@@ -462,7 +577,6 @@ class SpectralAnalysisWidget(QWidget):
             return
         dataset_index = item.data(Qt.UserRole)
         dataset = ROI_SPECTRUM_STORE.get_dataset(dataset_index)
-        self._selected_dataset_ids.discard(dataset.dataset_id)
         ROI_SPECTRUM_STORE.remove_dataset(dataset_index)
         self._roi_rows = []
         self._image_rows = []

@@ -1,8 +1,31 @@
 # Changelog
 
-## Unreleased
+## 1.4.0 - 2026-04-05
 
-- No unreleased changes yet.
+### Spatial Ratio Analysis
+
+- Added a new `Spatial Ratio Analysis` dock widget to the plugin manifest so users can launch kernel-based spatial-ratio workflows directly from the napari Plugins menu.
+- Added per-image ROI context tracking for shape ROIs, bound labels layers, and combined shape-plus-label refinement so users can see which images are ready for kernel analysis.
+- Added kernel-based spatial ratio computation with configurable kernel size, minimum valid coverage, split wavelength, ratio mode, optional normalization, and optional blank-reference subtraction.
+- Added scatter-selection, raw-kernel CSV export, summary CSV export, and `Send Summary To Analysis` so kernel results can be filtered, exported, and handed off into downstream statistical analysis.
+
+### Spectral Viewer
+
+- Improved ROI handling so bound labels can refine shape ROIs instead of forcing a labels-only workflow, and labels-only analysis still works when no shapes are present.
+- Added optional blank-reference subtraction during ROI spectrum measurement.
+- Expanded the ROI curation table with analysis toggles and editable metadata fields including `group_label`, `animal_id`, `sex`, `age`, `region`, and `roi_class`.
+- Updated ROI status messaging and context refresh behavior so image, ROI, and labels state stays synchronized while users prepare and curate datasets.
+
+### ROI Dataset Storage
+
+- Expanded stored ROI dataset metadata to include trace kind/label, measurement kind, analysis level, acceptance flags, ROI class, kernel settings, spatial-ratio summary metrics, and mean intensity.
+- Updated dataset replacement and CSV export logic so spectral and spatial-ratio datasets preserve the richer metadata needed for curation and downstream analysis.
+
+### Spectral Analysis
+
+- Added a measurement filter so the analysis widget can switch between `spectral_mean` and `spatial_ratio` datasets.
+- Added `trace_kind`, `trace_label`, and `roi_class` to the dataset table and extended grouping/statistical factor options to include `roi_class`.
+- Switched analysis selection to persistent per-dataset `use_for_analysis` flags stored in the shared ROI dataset store.
 
 ## 1.3.1 - 2026-04-05
 

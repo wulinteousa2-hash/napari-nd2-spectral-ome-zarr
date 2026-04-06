@@ -201,7 +201,20 @@ class BatchPseudocolorWorker(QObject):
 class SpectralViewerWidget(QWidget):
     ROI_LAYER_SUFFIX = " ROI"
     ROI_LABEL_LAYER_SUFFIX = " ROI Text"
-    COMPARISON_COLUMNS = ["plot", "image", "trace", "kind", "updated"]
+    CONTEXT_COLUMNS = ["image", "roi layer", "labels layer", "mode", "roi count", "status"]
+    CURATION_COLUMNS = [
+        "use",
+        "image",
+        "trace",
+        "kind",
+        "group_label",
+        "animal_id",
+        "sex",
+        "age",
+        "region",
+        "roi_class",
+        "updated",
+    ]
 
     def __init__(self, napari_viewer):
         super().__init__()
@@ -217,6 +230,7 @@ class SpectralViewerWidget(QWidget):
         self._pending_render_metadata = None
         self._pending_pseudocolor_layer_name = None
         self._pending_pseudocolor_metadata = None
+        self._updating_curation_table = False
         self._last_plot_kind = "roi"
         self._bound_roi_layer_ids: set[int] = set()
         self._bound_labels_layer_ids: set[int] = set()
@@ -226,24 +240,20 @@ class SpectralViewerWidget(QWidget):
 
         self.mode_combo = QComboBox()
         self.mode_combo.addItems(["Normalized", "Absolute"])
-        self.roi_source_combo = QComboBox()
-        self.roi_source_combo.addItems(["Shapes", "Labels"])
         self.pool_checkbox = QCheckBox("Plot pooled ROI mean")
         self.pool_checkbox.setChecked(False)
         self.individual_checkbox = QCheckBox("Plot individual ROIs")
         self.individual_checkbox.setChecked(True)
         self.include_background_checkbox = QCheckBox("Include background label 0")
         self.include_background_checkbox.setChecked(False)
+        self.blank_subtract_checkbox = QCheckBox("Subtract blank reference")
+        self.blank_subtract_checkbox.setChecked(False)
+        self.blank_reference_combo = QComboBox()
+        self.blank_reference_combo.setMinimumContentsLength(18)
         self.show_legend_checkbox = QCheckBox("Show legend")
         self.show_legend_checkbox.setChecked(True)
         self.legend_outside_checkbox = QCheckBox("Legend outside")
         self.legend_outside_checkbox.setChecked(True)
-
-        self.use_gpu_checkbox = QCheckBox("Use GPU for truecolor")
-        self.use_gpu_checkbox.setChecked(True)
-        self.worker_combo = QComboBox()
-        self.worker_combo.addItems(["1", "2", "4", "8"])
-        self.worker_combo.setCurrentText("2")
 
         self.plot_button = QPushButton("Refresh Active ROI Spectrum")
         self.plot_button.clicked.connect(self._plot_roi_spectrum)
@@ -251,30 +261,14 @@ class SpectralViewerWidget(QWidget):
         self.prepare_selected_roi_button.clicked.connect(self._prepare_selected_roi_layer)
         self.prepare_all_roi_button = QPushButton("Prepare ROI Layers")
         self.prepare_all_roi_button.clicked.connect(self._prepare_all_roi_layers)
-        self.roi_image_combo = QComboBox()
-        self.find_roi_image_button = QPushButton("Find Image")
+        self.find_roi_image_button = QPushButton("Focus Image")
         self.find_roi_image_button.clicked.connect(self._focus_selected_roi_image)
-        self.labels_layer_combo = QComboBox()
-        self.bind_labels_button = QPushButton("Bind Labels To Active Image")
-        self.bind_labels_button.clicked.connect(self._bind_selected_labels_layer)
-        self.clear_roi_button = QPushButton("Clear Active ROI")
+        self.bind_labels_button = QPushButton("Bind Active Labels")
+        self.bind_labels_button.clicked.connect(self._bind_active_labels_layer)
+        self.clear_roi_button = QPushButton("Clear Selected ROI")
         self.clear_roi_button.clicked.connect(self._clear_active_roi_layer)
         self.refresh_all_roi_button = QPushButton("Refresh All ROI Datasets")
         self.refresh_all_roi_button.clicked.connect(self._refresh_all_roi_datasets)
-
-        self.show_split_button = QPushButton("Show Split")
-        self.show_split_button.clicked.connect(self._show_split)
-
-        self.show_truecolor_button = QPushButton("Show Truecolor")
-        self.show_truecolor_button.clicked.connect(self._show_truecolor)
-        self.show_pseudocolor_button = QPushButton("Show Pseudocolor")
-        self.show_pseudocolor_button.clicked.connect(self._show_pseudocolor)
-        self.save_config_button = QPushButton("Save Pseudocolor Config")
-        self.save_config_button.clicked.connect(self._save_pseudocolor_config)
-        self.load_config_button = QPushButton("Load Pseudocolor Config")
-        self.load_config_button.clicked.connect(self._load_pseudocolor_config)
-        self.batch_pseudocolor_button = QPushButton("Batch Pseudocolor")
-        self.batch_pseudocolor_button.clicked.connect(self._batch_pseudocolor)
         self.export_dataset_button = QPushButton("Export Selected ROI CSV")
         self.export_dataset_button.clicked.connect(self._export_selected_roi_dataset)
         self.export_all_datasets_button = QPushButton("Export All ROI CSV")
@@ -284,35 +278,31 @@ class SpectralViewerWidget(QWidget):
         self.load_session_button = QPushButton("Load Session Package")
         self.load_session_button.clicked.connect(self._load_session_package)
 
-        self.shift_edit = QLineEdit("2.0")
-        self.gamma_edit = QLineEdit("1.2")
-        self.pseudocolor_mode_combo = QComboBox()
-        self.pseudocolor_mode_combo.addItems(["auto_shift", "roi_pair"])
-        self.kernel_combo = QComboBox()
-        self.kernel_combo.addItems(["1", "3", "4"])
-        self.kernel_combo.setCurrentText("3")
-        self.index_method_combo = QComboBox()
-        self.index_method_combo.addItems(["correlation", "ratio", "distance"])
-        self.bg_subtraction_checkbox = QCheckBox("Background subtraction")
-        self.auto_contrast_checkbox = QCheckBox("Auto contrast")
-        self.adaptive_eq_checkbox = QCheckBox("Adaptive EQ")
-
-        self.status_label = QLabel("Select a spectral layer and use Shapes or Labels as the ROI source.")
+        self.status_label = QLabel("No spectral image loaded. Open a spectral image, then prepare ROI layers to start plotting.")
+        self.context_table = QTableWidget()
+        self.context_table.setAlternatingRowColors(False)
+        self.context_table.setColumnCount(len(self.CONTEXT_COLUMNS))
+        self.context_table.setHorizontalHeaderLabels(self.CONTEXT_COLUMNS)
+        self.context_table.setMinimumHeight(150)
+        self.context_table.setSelectionBehavior(QAbstractItemView.SelectRows)
+        self.context_table.setSelectionMode(QAbstractItemView.SingleSelection)
+        self.context_table.itemSelectionChanged.connect(self._on_context_selection_changed)
         self.dataset_combo = QComboBox()
         self.dataset_combo.setEnabled(False)
         self.dataset_combo.addItem("No stored ROI datasets")
         self.comparison_table = QTableWidget()
         self.comparison_table.setAlternatingRowColors(False)
-        self.comparison_table.setColumnCount(len(self.COMPARISON_COLUMNS))
-        self.comparison_table.setHorizontalHeaderLabels(self.COMPARISON_COLUMNS)
+        self.comparison_table.setColumnCount(len(self.CURATION_COLUMNS))
+        self.comparison_table.setHorizontalHeaderLabels(self.CURATION_COLUMNS)
         self.comparison_table.setMinimumHeight(180)
         self.comparison_table.setSelectionBehavior(QAbstractItemView.SelectRows)
         self.comparison_table.setSelectionMode(QAbstractItemView.ExtendedSelection)
-        self.refresh_comparison_button = QPushButton("Refresh Comparison Table")
+        self.comparison_table.itemChanged.connect(self._on_curation_item_changed)
+        self.refresh_comparison_button = QPushButton("Refresh Curation Table")
         self.refresh_comparison_button.clicked.connect(self._refresh_comparison_table)
-        self.plot_selected_comparison_button = QPushButton("Plot Selected Across Images")
+        self.plot_selected_comparison_button = QPushButton("Plot Checked Traces")
         self.plot_selected_comparison_button.clicked.connect(self._plot_selected_comparison_rows)
-        self.remove_selected_comparison_button = QPushButton("Remove Selected Rows")
+        self.remove_selected_comparison_button = QPushButton("Reject Selected Rows")
         self.remove_selected_comparison_button.clicked.connect(self._remove_selected_comparison_rows)
         self.figure = Figure(figsize=(5, 3))
         self.canvas = FigureCanvasQTAgg(self.figure)
@@ -321,52 +311,31 @@ class SpectralViewerWidget(QWidget):
         controls = QHBoxLayout()
         controls.addWidget(QLabel("Plot mode"))
         controls.addWidget(self.mode_combo)
-        controls.addWidget(QLabel("ROI source"))
-        controls.addWidget(self.roi_source_combo)
         controls.addWidget(self.individual_checkbox)
         controls.addWidget(self.pool_checkbox)
         controls.addWidget(self.include_background_checkbox)
+        controls.addWidget(self.blank_subtract_checkbox)
+        controls.addWidget(QLabel("Blank image"))
+        controls.addWidget(self.blank_reference_combo)
         controls.addWidget(self.show_legend_checkbox)
         controls.addWidget(self.legend_outside_checkbox)
-        controls.addWidget(self.use_gpu_checkbox)
-        controls.addWidget(QLabel("Workers"))
-        controls.addWidget(self.worker_combo)
 
-        pseudocolor_controls = QHBoxLayout()
-        pseudocolor_controls.addWidget(QLabel("Pseudo mode"))
-        pseudocolor_controls.addWidget(self.pseudocolor_mode_combo)
-        pseudocolor_controls.addWidget(QLabel("Shift"))
-        pseudocolor_controls.addWidget(self.shift_edit)
-        pseudocolor_controls.addWidget(QLabel("Gamma"))
-        pseudocolor_controls.addWidget(self.gamma_edit)
-        pseudocolor_controls.addWidget(QLabel("Kernel"))
-        pseudocolor_controls.addWidget(self.kernel_combo)
-        pseudocolor_controls.addWidget(QLabel("Method"))
-        pseudocolor_controls.addWidget(self.index_method_combo)
-        pseudocolor_controls.addWidget(self.bg_subtraction_checkbox)
-        pseudocolor_controls.addWidget(self.auto_contrast_checkbox)
-        pseudocolor_controls.addWidget(self.adaptive_eq_checkbox)
+        context_buttons = QHBoxLayout()
+        context_buttons.addWidget(self.prepare_selected_roi_button)
+        context_buttons.addWidget(self.prepare_all_roi_button)
+        context_buttons.addWidget(self.find_roi_image_button)
+        context_buttons.addWidget(self.bind_labels_button)
+        context_buttons.addWidget(self.clear_roi_button)
+        context_buttons.addWidget(self.refresh_all_roi_button)
 
         roi_buttons = QHBoxLayout()
-        roi_buttons.addWidget(self.prepare_selected_roi_button)
-        roi_buttons.addWidget(self.prepare_all_roi_button)
-        roi_buttons.addWidget(QLabel("ROI image"))
-        roi_buttons.addWidget(self.roi_image_combo)
-        roi_buttons.addWidget(self.find_roi_image_button)
-        roi_buttons.addWidget(QLabel("Labels layer"))
-        roi_buttons.addWidget(self.labels_layer_combo)
-        roi_buttons.addWidget(self.bind_labels_button)
-        roi_buttons.addWidget(self.clear_roi_button)
         roi_buttons.addWidget(self.plot_button)
-        roi_buttons.addWidget(self.refresh_all_roi_button)
-        roi_buttons.addWidget(self.show_split_button)
-        roi_buttons.addWidget(self.show_truecolor_button)
 
-        config_buttons = QHBoxLayout()
-        config_buttons.addWidget(self.show_pseudocolor_button)
-        config_buttons.addWidget(self.save_config_button)
-        config_buttons.addWidget(self.load_config_button)
-        config_buttons.addWidget(self.batch_pseudocolor_button)
+        context_group = QGroupBox("Image ROI Context")
+        context_group_layout = QVBoxLayout()
+        context_group_layout.addLayout(context_buttons)
+        context_group_layout.addWidget(self.context_table)
+        context_group.setLayout(context_group_layout)
 
         dataset_buttons = QHBoxLayout()
         dataset_buttons.addWidget(QLabel("Stored ROI datasets"))
@@ -377,7 +346,7 @@ class SpectralViewerWidget(QWidget):
         dataset_buttons.addWidget(self.load_session_button)
 
         comparison_buttons = QHBoxLayout()
-        comparison_buttons.addWidget(QLabel("ROI comparison"))
+        comparison_buttons.addWidget(QLabel("Analysis curation"))
         comparison_buttons.addWidget(self.refresh_comparison_button)
         comparison_buttons.addWidget(self.plot_selected_comparison_button)
         comparison_buttons.addWidget(self.remove_selected_comparison_button)
@@ -389,23 +358,17 @@ class SpectralViewerWidget(QWidget):
         roi_group_layout.addWidget(self.canvas)
         roi_group.setLayout(roi_group_layout)
 
-        comparison_group = QGroupBox("ROI Comparison")
+        comparison_group = QGroupBox("ROI Curation")
         comparison_group_layout = QVBoxLayout()
         comparison_group_layout.addLayout(dataset_buttons)
         comparison_group_layout.addLayout(comparison_buttons)
         comparison_group_layout.addWidget(self.comparison_table)
         comparison_group.setLayout(comparison_group_layout)
 
-        pseudocolor_group = QGroupBox("Pseudocolor")
-        pseudocolor_group_layout = QVBoxLayout()
-        pseudocolor_group_layout.addLayout(pseudocolor_controls)
-        pseudocolor_group_layout.addLayout(config_buttons)
-        pseudocolor_group.setLayout(pseudocolor_group_layout)
-
         layout = QVBoxLayout()
+        layout.addWidget(context_group, 0)
         layout.addWidget(roi_group, 1)
         layout.addWidget(comparison_group, 0)
-        layout.addWidget(pseudocolor_group, 0)
         layout.addWidget(self.status_label)
         self.setLayout(layout)
         if hasattr(self.viewer, "layers") and hasattr(self.viewer.layers, "events"):
@@ -415,15 +378,16 @@ class SpectralViewerWidget(QWidget):
         if selection_events is not None and hasattr(selection_events, "active"):
             selection_events.active.connect(self._on_active_layer_changed)
         self._refresh_dataset_combo()
-        self._refresh_labels_layer_combo()
-        self._refresh_roi_image_combo()
+        self._refresh_blank_reference_combo()
+        self._refresh_context_table()
         self._refresh_comparison_table()
         self._sync_roi_context_visibility()
         self.mode_combo.currentTextChanged.connect(self._refresh_active_plot_from_controls)
-        self.roi_source_combo.currentTextChanged.connect(self._refresh_active_plot_from_controls)
         self.individual_checkbox.stateChanged.connect(self._refresh_active_plot_from_controls)
         self.pool_checkbox.stateChanged.connect(self._refresh_active_plot_from_controls)
         self.include_background_checkbox.stateChanged.connect(self._refresh_active_plot_from_controls)
+        self.blank_subtract_checkbox.stateChanged.connect(self._refresh_active_plot_from_controls)
+        self.blank_reference_combo.currentTextChanged.connect(self._refresh_active_plot_from_controls)
         self.show_legend_checkbox.stateChanged.connect(self._refresh_active_plot_from_controls)
         self.legend_outside_checkbox.stateChanged.connect(self._refresh_active_plot_from_controls)
         float_parent_dock_later(self)
@@ -458,8 +422,8 @@ class SpectralViewerWidget(QWidget):
 
     def _on_layers_changed(self, event=None):
         del event
-        self._refresh_labels_layer_combo()
-        self._refresh_roi_image_combo()
+        self._refresh_blank_reference_combo()
+        self._refresh_context_table()
         self._reorder_roi_context_layers()
         self._sync_roi_context_visibility()
 
@@ -486,50 +450,91 @@ class SpectralViewerWidget(QWidget):
                 spectral_layers.append(layer)
         return spectral_layers
 
-    def _refresh_labels_layer_combo(self):
-        current_name = self.labels_layer_combo.currentText() if self.labels_layer_combo.count() else ""
-        self.labels_layer_combo.blockSignals(True)
-        self.labels_layer_combo.clear()
-        labels_layers = [layer for layer in self.viewer.layers if layer.__class__.__name__ == "Labels"]
-        if not labels_layers:
-            self.labels_layer_combo.addItem("No labels layers", userData=None)
-            self.labels_layer_combo.setEnabled(False)
-            self.bind_labels_button.setEnabled(False)
-            self.labels_layer_combo.blockSignals(False)
-            return
-
-        self.labels_layer_combo.setEnabled(True)
-        self.bind_labels_button.setEnabled(True)
-        selected_index = 0
-        for index, layer in enumerate(labels_layers):
-            self.labels_layer_combo.addItem(layer.name, userData=layer.name)
-            if layer.name == current_name:
-                selected_index = index
-        self.labels_layer_combo.setCurrentIndex(selected_index)
-        self.labels_layer_combo.blockSignals(False)
-
-    def _refresh_roi_image_combo(self):
-        current_name = self.roi_image_combo.currentData()
+    def _refresh_context_table(self):
+        current_name = self._selected_context_source_layer_name(optional=True)
         spectral_layers = self._spectral_layers()
-        self.roi_image_combo.blockSignals(True)
-        self.roi_image_combo.clear()
         if not spectral_layers:
-            self.roi_image_combo.addItem("No open spectral images", userData=None)
-            self.roi_image_combo.setEnabled(False)
+            self.context_table.clearContents()
+            self.context_table.setRowCount(0)
             self.prepare_selected_roi_button.setEnabled(False)
             self.find_roi_image_button.setEnabled(False)
-            self.roi_image_combo.blockSignals(False)
+            self.bind_labels_button.setEnabled(False)
+            self.clear_roi_button.setEnabled(False)
+            self.plot_button.setEnabled(False)
+            self.status_label.setText("No spectral image loaded. Open a spectral image, then prepare ROI layers to start plotting.")
             return
-        self.roi_image_combo.setEnabled(True)
+
         self.prepare_selected_roi_button.setEnabled(True)
         self.find_roi_image_button.setEnabled(True)
+        self.bind_labels_button.setEnabled(True)
+        self.clear_roi_button.setEnabled(True)
+        self.plot_button.setEnabled(True)
+        self.context_table.blockSignals(True)
+        self.context_table.clearContents()
+        self.context_table.setRowCount(len(spectral_layers))
+        selected_row = 0
+        for row_index, layer in enumerate(spectral_layers):
+            metadata = getattr(layer, "metadata", {})
+            cube = np.asarray(metadata.get("spectral_cube"), dtype=np.float32)
+            roi_layer = self._find_roi_shapes_layer(layer.name)
+            labels_layer = self._find_bound_labels_layer(layer.name)
+            mode_label, roi_count, status = self._roi_context_summary(layer.name, cube)
+            values = [
+                layer.name,
+                "" if roi_layer is None else roi_layer.name,
+                "" if labels_layer is None else labels_layer.name,
+                mode_label,
+                str(roi_count),
+                status,
+            ]
+            for column_index, value in enumerate(values):
+                item = QTableWidgetItem(value)
+                item.setFlags(item.flags() & ~Qt.ItemIsEditable)
+                item.setData(Qt.UserRole, layer.name)
+                self.context_table.setItem(row_index, column_index, item)
+            if layer.name == current_name:
+                selected_row = row_index
+        self.context_table.resizeColumnsToContents()
+        self.context_table.selectRow(selected_row)
+        self.context_table.blockSignals(False)
+
+    def _refresh_blank_reference_combo(self):
+        current_name = self.blank_reference_combo.currentData()
+        spectral_layers = self._spectral_layers()
+        self.blank_reference_combo.blockSignals(True)
+        self.blank_reference_combo.clear()
+        self.blank_reference_combo.addItem("None", userData=None)
         selected_index = 0
-        for index, layer in enumerate(spectral_layers):
-            self.roi_image_combo.addItem(layer.name, userData=layer.name)
+        for index, layer in enumerate(spectral_layers, start=1):
+            self.blank_reference_combo.addItem(layer.name, userData=layer.name)
             if layer.name == current_name:
                 selected_index = index
-        self.roi_image_combo.setCurrentIndex(selected_index)
-        self.roi_image_combo.blockSignals(False)
+        self.blank_reference_combo.setCurrentIndex(selected_index)
+        self.blank_reference_combo.blockSignals(False)
+
+    def _selected_context_source_layer_name(self, optional: bool = False) -> str | None:
+        selection_model = self.context_table.selectionModel()
+        if selection_model is not None:
+            selected_rows = selection_model.selectedRows()
+            if selected_rows:
+                item = self.context_table.item(selected_rows[0].row(), 0)
+                if item is not None:
+                    return str(item.data(Qt.UserRole) or item.text())
+        active_source = self._source_layer_name_for_layer(getattr(self.viewer.layers.selection, "active", None))
+        if active_source:
+            return str(active_source)
+        if optional:
+            return None
+        raise ValueError("Choose an image context row first.")
+
+    def _on_context_selection_changed(self):
+        spectral_layer_name = self._selected_context_source_layer_name(optional=True)
+        if not spectral_layer_name:
+            return
+        spectral_layer = self._find_layer_by_name(spectral_layer_name)
+        if spectral_layer is not None:
+            self.viewer.layers.selection.active = spectral_layer
+            self._sync_roi_context_visibility()
 
     def _active_roi_shapes_layer(self, spectral_layer_name: str):
         active_layer = self.viewer.layers.selection.active
@@ -644,20 +649,34 @@ class SpectralViewerWidget(QWidget):
                 continue
             layer.visible = bool(active_source_layer_name) and source_layer_name == active_source_layer_name
         if active_source_layer_name:
-            combo_index = self.roi_image_combo.findData(active_source_layer_name)
-            if combo_index >= 0:
-                self.roi_image_combo.blockSignals(True)
-                self.roi_image_combo.setCurrentIndex(combo_index)
-                self.roi_image_combo.blockSignals(False)
+            self._select_context_row(active_source_layer_name)
 
     def _selected_labels_layer(self):
-        layer_name = self.labels_layer_combo.currentData()
-        if not layer_name:
-            raise ValueError("Choose a labels layer to bind first.")
-        layer = self._find_layer_by_name(layer_name)
-        if layer is None or layer.__class__.__name__ != "Labels":
-            raise ValueError("Selected labels layer is no longer available.")
-        return layer
+        active_layer = getattr(self.viewer.layers.selection, "active", None)
+        if active_layer is None or active_layer.__class__.__name__ != "Labels":
+            raise ValueError("Select a Labels layer in napari first, then bind it to the selected image row.")
+        return active_layer
+
+    def _select_context_row(self, spectral_layer_name: str):
+        for row_index in range(self.context_table.rowCount()):
+            item = self.context_table.item(row_index, 0)
+            if item is not None and str(item.data(Qt.UserRole) or item.text()) == spectral_layer_name:
+                self.context_table.blockSignals(True)
+                self.context_table.selectRow(row_index)
+                self.context_table.blockSignals(False)
+                return
+
+    def _roi_context_summary(self, spectral_layer_name: str, cube: np.ndarray) -> tuple[str, int, str]:
+        roi_layer = self._find_roi_shapes_layer(spectral_layer_name)
+        labels_layer = self._find_bound_labels_layer(spectral_layer_name)
+        roi_items = self._collect_roi_items_for_layer(spectral_layer_name, cube)
+        if roi_layer is not None and labels_layer is not None:
+            return "Shapes + Labels", len(roi_items), "Labels refine pixels inside shapes"
+        if roi_layer is not None:
+            return "Shapes only", len(roi_items), "Shape area is measured directly"
+        if labels_layer is not None:
+            return "Labels only", len(roi_items), "Full image is used as the implicit shape"
+        return "No ROI", 0, "Prepare an ROI layer or bind labels"
 
     def _bind_labels_layer_events(self, labels_layer):
         layer_id = id(labels_layer)
@@ -716,54 +735,32 @@ class SpectralViewerWidget(QWidget):
     def _prepare_roi_layer(self):
         try:
             spectral_layer, _cube, _wavelengths, _metadata = self._active_spectral_layer()
-            if self.roi_source_combo.currentText() == "Labels":
-                labels_layer = self._find_bound_labels_layer(spectral_layer.name)
-                if labels_layer is None:
-                    self.status_label.setText("Bind a labels layer to the active image first.")
-                    return
-                self._bind_labels_layer_events(labels_layer)
-                self.viewer.layers.selection.active = labels_layer
-                self._sync_roi_context_visibility()
-                self.status_label.setText(
-                    f"Using labels layer '{labels_layer.name}' for '{spectral_layer.name}'. Nonzero label values become ROI populations."
-                )
-                return
             roi_layer = self._ensure_roi_shapes_layer(spectral_layer.name)
+            self._refresh_context_table()
             self.status_label.setText(
-                f"Using ROI layer '{roi_layer.name}'. Draw ROIs there for the active image only."
+                f"Using ROI layer '{roi_layer.name}'. Draw shapes for '{spectral_layer.name}'. If labels are also bound, only labeled pixels inside each shape will be measured."
             )
         except Exception as exc:
             self.status_label.setText(str(exc))
 
     def _selected_spectral_layer(self):
-        spectral_layer_name = self.roi_image_combo.currentData()
+        spectral_layer_name = self._selected_context_source_layer_name()
         if not spectral_layer_name:
-            raise ValueError("Choose an open spectral image first.")
+            raise ValueError("Choose an image context row first.")
         spectral_layer = self._find_layer_by_name(str(spectral_layer_name))
         if spectral_layer is None:
-            self._refresh_roi_image_combo()
+            self._refresh_context_table()
             raise ValueError("Selected spectral image is no longer open.")
         return spectral_layer
 
     def _prepare_roi_layer_for_spectral_layer(self, spectral_layer, *, activate_roi_layer: bool = False):
-        if self.roi_source_combo.currentText() == "Labels":
-            labels_layer = self._find_bound_labels_layer(spectral_layer.name)
-            if labels_layer is None:
-                raise ValueError(f"No bound labels layer exists for '{spectral_layer.name}'.")
-            self._bind_labels_layer_events(labels_layer)
-            self.viewer.layers.selection.active = spectral_layer
-            self._sync_roi_context_visibility()
-            self.status_label.setText(
-                f"Prepared labels ROI context for '{spectral_layer.name}'. Use the bound labels layer '{labels_layer.name}'."
-            )
-            return labels_layer
-
         roi_layer = self._ensure_roi_shapes_layer(spectral_layer.name, activate=activate_roi_layer)
         if not activate_roi_layer:
             self.viewer.layers.selection.active = spectral_layer
             self._sync_roi_context_visibility()
+        self._refresh_context_table()
         self.status_label.setText(
-            f"Prepared ROI layer '{roi_layer.name}' for '{spectral_layer.name}'. Select it in the layer list when you want to draw."
+            f"Prepared ROI layer '{roi_layer.name}' for '{spectral_layer.name}'. Shapes define the ROI boundary, and bound labels refine the measured pixels inside each shape."
         )
         return roi_layer
 
@@ -782,20 +779,10 @@ class SpectralViewerWidget(QWidget):
                 return
             prepared_count = 0
             for spectral_layer in spectral_layers:
-                if self.roi_source_combo.currentText() == "Labels":
-                    labels_layer = self._find_bound_labels_layer(spectral_layer.name)
-                    if labels_layer is None:
-                        continue
-                    self._bind_labels_layer_events(labels_layer)
-                    prepared_count += 1
-                    continue
                 self._ensure_roi_shapes_layer(spectral_layer.name, activate=False)
                 prepared_count += 1
-            if prepared_count == 0 and self.roi_source_combo.currentText() == "Labels":
-                self.status_label.setText("No labels layers are bound to the open spectral images yet.")
-                return
-            mode_label = "labels bindings" if self.roi_source_combo.currentText() == "Labels" else "ROI layers"
-            self.status_label.setText(f"Prepared {prepared_count} {mode_label} across the open spectral images.")
+            self._refresh_context_table()
+            self.status_label.setText(f"Prepared {prepared_count} ROI layer(s) across the open spectral images.")
         except Exception as exc:
             self.status_label.setText(str(exc))
 
@@ -808,22 +795,24 @@ class SpectralViewerWidget(QWidget):
         except Exception as exc:
             self.status_label.setText(str(exc))
 
-    def _bind_selected_labels_layer(self):
+    def _bind_active_labels_layer(self):
         try:
-            spectral_layer, cube, _wavelengths, _metadata = self._active_spectral_layer()
+            spectral_layer = self._selected_spectral_layer()
+            metadata = getattr(spectral_layer, "metadata", {})
+            cube = np.asarray(metadata.get("spectral_cube"), dtype=np.float32)
             labels_layer = self._selected_labels_layer()
             labels_data = self._labels_array_for_cube(labels_layer, cube)
             labels_layer.metadata = {
                 **getattr(labels_layer, "metadata", {}),
                 "source_spectral_layer_name": spectral_layer.name,
-                "roi_source_kind": "labels",
                 "labels_shape": tuple(int(value) for value in labels_data.shape),
             }
             self._bind_labels_layer_events(labels_layer)
-            self.viewer.layers.selection.active = labels_layer
+            self.viewer.layers.selection.active = spectral_layer
             self._sync_roi_context_visibility()
+            self._refresh_context_table()
             self.status_label.setText(
-                f"Bound labels layer '{labels_layer.name}' to '{spectral_layer.name}'. Label values define ROI populations."
+                f"Bound labels layer '{labels_layer.name}' to '{spectral_layer.name}'. Labels outside ROI shapes will be ignored. If no shapes exist, the full image will be used as the implicit shape."
             )
         except Exception as exc:
             self.status_label.setText(str(exc))
@@ -831,66 +820,42 @@ class SpectralViewerWidget(QWidget):
     def _clear_active_roi_layer(self):
         try:
             spectral_layer, _cube, _wavelengths, _metadata = self._active_spectral_layer()
-            if self.roi_source_combo.currentText() == "Labels":
-                labels_layer = self._find_bound_labels_layer(spectral_layer.name)
-                if labels_layer is None:
-                    self.status_label.setText("No bound labels layer exists for the active image.")
-                    return
-                labels_layer.metadata = {
-                    key: value
-                    for key, value in getattr(labels_layer, "metadata", {}).items()
-                    if key != "source_spectral_layer_name"
-                }
-                label_layer = self._find_roi_label_layer(spectral_layer.name)
-                if label_layer is not None:
-                    label_layer.data = np.empty((0, 2), dtype=np.float32)
-                    label_layer.properties = {"label": np.asarray([], dtype=object)}
-                    label_layer.refresh()
-                self.status_label.setText(
-                    f"Removed labels binding for '{labels_layer.name}' from '{spectral_layer.name}'."
-                )
-                return
             roi_layer = self._find_roi_shapes_layer(spectral_layer.name)
-            if roi_layer is None:
-                self.status_label.setText("No ROI layer exists yet for the active image.")
-                return
-            roi_layer.data = []
-            roi_layer.refresh()
+            labels_layer = self._find_bound_labels_layer(spectral_layer.name)
+            if roi_layer is not None:
+                roi_layer.data = []
+                roi_layer.refresh()
             label_layer = self._find_roi_label_layer(spectral_layer.name)
             if label_layer is not None:
                 label_layer.data = np.empty((0, 2), dtype=np.float32)
                 label_layer.properties = {"label": np.asarray([], dtype=object)}
                 label_layer.refresh()
-            self.viewer.layers.selection.active = roi_layer
-            self.status_label.setText(
-                f"Cleared ROI shapes for '{spectral_layer.name}'. ROI numbering will restart from ROI 1."
-            )
+            if roi_layer is None and labels_layer is not None:
+                labels_layer.metadata = {
+                    key: value
+                    for key, value in getattr(labels_layer, "metadata", {}).items()
+                    if key != "source_spectral_layer_name"
+                }
+                self.status_label.setText(f"Removed labels binding for '{labels_layer.name}' from '{spectral_layer.name}'.")
+            elif roi_layer is not None:
+                self.viewer.layers.selection.active = roi_layer
+                if labels_layer is not None:
+                    self.status_label.setText(
+                        f"Cleared ROI shapes for '{spectral_layer.name}'. The bound labels layer remains available, so labels-only measurement can still be used."
+                    )
+                else:
+                    self.status_label.setText(
+                        f"Cleared ROI shapes for '{spectral_layer.name}'. ROI numbering will restart from ROI 1."
+                    )
+            else:
+                self.status_label.setText("No ROI layer or labels binding exists for the selected image.")
+            self._refresh_context_table()
         except Exception as exc:
             self.status_label.setText(str(exc))
 
     def _collect_roi_items(self, cube: np.ndarray) -> list[dict]:
         spectral_layer, _cube, _wavelengths, _metadata = self._active_spectral_layer()
-        if self.roi_source_combo.currentText() == "Labels":
-            labels_layer = self._find_bound_labels_layer(spectral_layer.name)
-            if labels_layer is None:
-                return []
-            roi_items = self._collect_label_roi_items(cube, labels_layer)
-            self._update_roi_layer_metadata(labels_layer, roi_items)
-            return roi_items
-        roi_layer = self._active_roi_shapes_layer(spectral_layer.name)
-        if roi_layer is None:
-            return []
-        rois = []
-        for shape_index, shape in enumerate(roi_layer.data):
-            vertices = np.asarray(shape)
-            roi_item = self._build_roi_item(cube, roi_layer, shape_index, vertices)
-            if roi_item is not None:
-                rois.append(
-                    roi_item
-                )
-        rois.sort(key=lambda item: item["x_center"])
-        self._update_roi_layer_metadata(roi_layer, rois)
-        return rois
+        return self._collect_roi_items_for_layer(spectral_layer.name, cube)
 
     def _build_roi_item(self, cube: np.ndarray, roi_layer, shape_index: int, vertices: np.ndarray):
         if vertices.ndim != 2 or vertices.shape[1] < 2:
@@ -916,6 +881,10 @@ class SpectralViewerWidget(QWidget):
             "center": centroid.astype(np.float32),
             "roi_cube": roi_cube,
             "roi_mask": mask,
+            "y_min": y_min,
+            "y_max": y_max,
+            "x_min": x_min,
+            "x_max": x_max,
             "layer": roi_layer,
             "roi_label": "",
             "mask_value": None,
@@ -923,6 +892,39 @@ class SpectralViewerWidget(QWidget):
             "shape_type": shape_type,
             "area_px": area_px,
         }
+
+    def _collect_shape_refined_label_roi_items(self, cube: np.ndarray, roi_layer, labels_layer) -> list[dict]:
+        labels_data = self._labels_array_for_cube(labels_layer, cube)
+        roi_items = []
+        for shape_index, shape in enumerate(roi_layer.data):
+            vertices = np.asarray(shape)
+            base_item = self._build_roi_item(cube, roi_layer, shape_index, vertices)
+            if base_item is None:
+                continue
+            local_labels = labels_data[base_item["y_min"]:base_item["y_max"], base_item["x_min"]:base_item["x_max"]]
+            label_values = np.unique(local_labels.astype(np.int64, copy=False))
+            for label_value in sorted(int(value) for value in label_values):
+                if label_value == 0 and not self.include_background_checkbox.isChecked():
+                    continue
+                refined_mask = np.logical_and(base_item["roi_mask"], local_labels == label_value)
+                area_px = int(refined_mask.sum())
+                if area_px <= 0:
+                    continue
+                coords = np.argwhere(refined_mask)
+                center = coords.mean(axis=0).astype(np.float32)
+                roi_items.append(
+                    {
+                        **base_item,
+                        "center": np.asarray([center[0] + base_item["y_min"], center[1] + base_item["x_min"]], dtype=np.float32),
+                        "x_center": float(center[1] + base_item["x_min"]),
+                        "roi_mask": refined_mask,
+                        "roi_label": f"ROI {shape_index + 1} | Label {label_value}",
+                        "mask_value": int(label_value),
+                        "area_px": area_px,
+                    }
+                )
+        roi_items.sort(key=lambda item: item["x_center"])
+        return roi_items
 
     def _collect_label_roi_items(self, cube: np.ndarray, labels_layer) -> list[dict]:
         labels_data = self._labels_array_for_cube(labels_layer, cube)
@@ -1000,6 +1002,52 @@ class SpectralViewerWidget(QWidget):
         if roi_pixels.size == 0:
             raise ValueError("Selected ROI does not contain any pixels.")
         return roi_pixels.mean(axis=1)
+
+    def _blank_reference_layer(self, source_layer_name: str):
+        if not self.blank_subtract_checkbox.isChecked():
+            return None
+        blank_layer_name = self.blank_reference_combo.currentData()
+        if not blank_layer_name:
+            return None
+        if str(blank_layer_name) == source_layer_name:
+            raise ValueError("Blank reference image must be different from the source image.")
+        layer = self._find_layer_by_name(str(blank_layer_name))
+        if layer is None:
+            raise ValueError("Selected blank reference image is no longer available.")
+        metadata = getattr(layer, "metadata", {})
+        cube = metadata.get("spectral_cube")
+        wavelengths = np.asarray(metadata.get("wavelengths_nm", []), dtype=np.float32)
+        if cube is None or wavelengths.size == 0:
+            raise ValueError("Selected blank reference does not contain spectral metadata.")
+        return np.asarray(cube, dtype=np.float32), wavelengths
+
+    def _apply_blank_reference_to_spectrum(
+        self,
+        spectrum: np.ndarray,
+        *,
+        source_layer_name: str,
+        wavelengths: np.ndarray,
+        source_cube_shape: tuple[int, ...],
+        roi_item: dict | None = None,
+    ) -> np.ndarray:
+        blank_reference = self._blank_reference_layer(source_layer_name)
+        if blank_reference is None:
+            return np.asarray(spectrum, dtype=np.float32)
+        blank_cube, blank_wavelengths = blank_reference
+        if blank_wavelengths.size != wavelengths.size:
+            raise ValueError("Blank reference wavelength count does not match the source image.")
+        if source_cube_shape[0] != blank_cube.shape[0]:
+            raise ValueError("Blank reference spectral-bin count does not match the source image.")
+        if blank_cube.shape[1:] == tuple(int(v) for v in source_cube_shape[1:]):
+            if roi_item is not None:
+                local_blank = blank_cube[:, roi_item["y_min"]:roi_item["y_max"], roi_item["x_min"]:roi_item["x_max"]]
+                blank_pixels = local_blank[:, roi_item["roi_mask"]]
+            else:
+                blank_pixels = blank_cube.reshape(blank_cube.shape[0], -1)
+            blank_spectrum = blank_pixels.mean(axis=1)
+        else:
+            blank_spectrum = blank_cube.mean(axis=(1, 2))
+        return np.asarray(spectrum, dtype=np.float32) - np.asarray(blank_spectrum, dtype=np.float32)
 
     def _display_spectrum(self, spectrum: np.ndarray) -> np.ndarray:
         data = np.asarray(spectrum, dtype=np.float32)
@@ -1102,6 +1150,7 @@ class SpectralViewerWidget(QWidget):
             self.status_label.setText(
                 f"Updated {stored_count} stored ROI dataset(s). Open Spectral Analysis to compare them across images."
             )
+            self._refresh_context_table()
         except Exception as exc:
             self.status_label.setText(str(exc))
 
@@ -1140,23 +1189,26 @@ class SpectralViewerWidget(QWidget):
             if dataset.pooled_spectrum is not None:
                 rows.append((dataset_index, None, dataset.source_layer_name, "Pooled", "Pooled"))
 
+        self._updating_curation_table = True
         self.comparison_table.clearContents()
         self.comparison_table.setRowCount(len(rows))
-        self.comparison_table.setColumnCount(len(self.COMPARISON_COLUMNS))
-        self.comparison_table.setHorizontalHeaderLabels(self.COMPARISON_COLUMNS)
+        self.comparison_table.setColumnCount(len(self.CURATION_COLUMNS))
+        self.comparison_table.setHorizontalHeaderLabels(self.CURATION_COLUMNS)
         if not rows:
             self.plot_selected_comparison_button.setEnabled(False)
             self.remove_selected_comparison_button.setEnabled(False)
             self.comparison_table.resizeColumnsToContents()
+            self._updating_curation_table = False
             return
 
         self.plot_selected_comparison_button.setEnabled(True)
         self.remove_selected_comparison_button.setEnabled(True)
         for row_index, (dataset_index, trace_index, source_layer_name, trace_label, kind) in enumerate(rows):
-            for column_index, column_name in enumerate(self.COMPARISON_COLUMNS):
-                if column_name == "plot":
+            dataset = datasets[dataset_index]
+            for column_index, column_name in enumerate(self.CURATION_COLUMNS):
+                if column_name == "use":
                     item = QTableWidgetItem()
-                    item.setCheckState(Qt.Checked)
+                    item.setCheckState(Qt.Checked if dataset.use_for_analysis else Qt.Unchecked)
                     item.setFlags((item.flags() | Qt.ItemIsUserCheckable | Qt.ItemIsEnabled) & ~Qt.ItemIsEditable)
                 elif column_name == "image":
                     item = QTableWidgetItem(source_layer_name)
@@ -1167,12 +1219,42 @@ class SpectralViewerWidget(QWidget):
                 elif column_name == "kind":
                     item = QTableWidgetItem(kind)
                     item.setFlags(item.flags() & ~Qt.ItemIsEditable)
+                elif column_name == "group_label":
+                    item = QTableWidgetItem(dataset.group_label)
+                elif column_name == "animal_id":
+                    item = QTableWidgetItem(dataset.animal_id)
+                elif column_name == "sex":
+                    item = QTableWidgetItem(dataset.sex)
+                elif column_name == "age":
+                    item = QTableWidgetItem(dataset.age)
+                elif column_name == "region":
+                    item = QTableWidgetItem(dataset.region)
+                elif column_name == "roi_class":
+                    item = QTableWidgetItem(dataset.roi_class)
                 else:
-                    item = QTableWidgetItem(datasets[dataset_index].created_at)
+                    item = QTableWidgetItem(dataset.created_at)
                     item.setFlags(item.flags() & ~Qt.ItemIsEditable)
                 item.setData(Qt.UserRole, (dataset_index, trace_index))
                 self.comparison_table.setItem(row_index, column_index, item)
         self.comparison_table.resizeColumnsToContents()
+        self._updating_curation_table = False
+
+    def _on_curation_item_changed(self, item: QTableWidgetItem):
+        if self._updating_curation_table or item is None:
+            return
+        row_data = item.data(Qt.UserRole)
+        if row_data is None:
+            return
+        dataset_index, _trace_index = row_data
+        column_name = self.CURATION_COLUMNS[item.column()]
+        if column_name == "use":
+            ROI_SPECTRUM_STORE.update_metadata(dataset_index, use_for_analysis=item.checkState() == Qt.Checked)
+            self.status_label.setText("Updated analysis-selection state for the selected dataset.")
+            return
+        editable_fields = {"group_label", "animal_id", "sex", "age", "region", "roi_class"}
+        if column_name in editable_fields:
+            ROI_SPECTRUM_STORE.update_metadata(dataset_index, **{column_name: item.text().strip()})
+            self.status_label.setText(f"Updated '{column_name}' for the selected dataset.")
 
     def _plot_selected_comparison_rows(self):
         datasets = ROI_SPECTRUM_STORE.list_datasets()
@@ -1188,7 +1270,7 @@ class SpectralViewerWidget(QWidget):
             dataset_index, trace_index = item.data(Qt.UserRole)
             selected_rows.append((dataset_index, trace_index))
         if not selected_rows:
-            self.status_label.setText("Select at least one ROI or pooled trace in the comparison table.")
+            self.status_label.setText("Check at least one ROI or pooled trace in the curation table.")
             return
 
         self.figure.clear()
@@ -1215,7 +1297,7 @@ class SpectralViewerWidget(QWidget):
         )
         self.canvas.draw()
         self._last_plot_kind = "comparison"
-        self.status_label.setText(f"Plotted {len(selected_rows)} selected trace(s) across stored ROI datasets.")
+        self.status_label.setText(f"Plotted {len(selected_rows)} checked trace(s) from the curation table.")
 
     def _remove_selected_comparison_rows(self):
         datasets = ROI_SPECTRUM_STORE.list_datasets()
@@ -1225,11 +1307,11 @@ class SpectralViewerWidget(QWidget):
 
         selection_model = self.comparison_table.selectionModel()
         if selection_model is None:
-            self.status_label.setText("Comparison-table selection is unavailable.")
+            self.status_label.setText("Curation-table selection is unavailable.")
             return
         selected_rows = sorted({index.row() for index in selection_model.selectedRows()})
         if not selected_rows:
-            self.status_label.setText("Select one or more comparison-table rows to remove.")
+            self.status_label.setText("Select one or more curation-table rows to reject.")
             return
 
         removals: dict[int, dict[str, object]] = {}
@@ -1259,7 +1341,7 @@ class SpectralViewerWidget(QWidget):
         self._refresh_dataset_combo()
         self._refresh_comparison_table()
         self._last_plot_kind = "roi"
-        self.status_label.setText(f"Removed {len(selected_rows)} ROI comparison row(s).")
+        self.status_label.setText(f"Rejected {len(selected_rows)} ROI curation row(s).")
 
     def _clear_plot(self):
         self.figure.clear()
@@ -1295,10 +1377,9 @@ class SpectralViewerWidget(QWidget):
             roi_items = self._collect_roi_items(cube)
             if require_rois and not roi_items:
                 self._clear_plot()
-                if self.roi_source_combo.currentText() == "Labels":
-                    self.status_label.setText("ROI spectrum ready. Bind a labels layer with nonzero label values to update spectra automatically.")
-                else:
-                    self.status_label.setText("ROI spectrum ready. Draw ROI 1, ROI 2, ROI 3... to update spectra automatically.")
+                self.status_label.setText(
+                    "ROI spectrum ready. Draw shapes, bind labels, or use labels-only measurement to update spectra automatically."
+                )
                 return
 
             roi_cubes = [item["roi_cube"] for item in roi_items] or [cube]
@@ -1310,8 +1391,15 @@ class SpectralViewerWidget(QWidget):
             for index, roi_cube in enumerate(roi_cubes, start=1):
                 roi_item = roi_items[index - 1] if roi_items else None
                 raw_spectrum = self._roi_mean_spectrum(roi_item) if roi_item is not None else roi_cube.mean(axis=(1, 2))
-                display_spectrum = self._display_spectrum(raw_spectrum)
-                pooled_spectra.append(raw_spectrum)
+                corrected_spectrum = self._apply_blank_reference_to_spectrum(
+                    raw_spectrum,
+                    source_layer_name=layer.name,
+                    wavelengths=wavelengths,
+                    source_cube_shape=tuple(int(v) for v in cube.shape),
+                    roi_item=roi_item,
+                )
+                display_spectrum = self._display_spectrum(corrected_spectrum)
+                pooled_spectra.append(corrected_spectrum)
                 if roi_item is not None:
                     roi_label = roi_item.get("roi_label") or f"ROI {index}"
                     roi_labels.append(roi_label)
@@ -1353,6 +1441,7 @@ class SpectralViewerWidget(QWidget):
                 roi_spectra=pooled_spectra,
                 pooled_spectrum=pooled,
             )
+            self._refresh_context_table()
             self.status_label.setText(
                 f"Spectrum updated for {len(roi_cubes)} ROI(s). Stored {stored_dataset.name} in memory."
             )
@@ -1360,25 +1449,28 @@ class SpectralViewerWidget(QWidget):
             self.status_label.setText(str(exc))
 
     def _collect_roi_items_for_layer(self, spectral_layer_name: str, cube: np.ndarray) -> list[dict]:
-        if self.roi_source_combo.currentText() == "Labels":
-            labels_layer = self._find_bound_labels_layer(spectral_layer_name)
-            if labels_layer is None:
-                return []
+        roi_layer = self._find_roi_shapes_layer(spectral_layer_name)
+        labels_layer = self._find_bound_labels_layer(spectral_layer_name)
+        if roi_layer is not None and len(getattr(roi_layer, "data", [])) > 0:
+            if labels_layer is not None:
+                roi_items = self._collect_shape_refined_label_roi_items(cube, roi_layer, labels_layer)
+                self._update_roi_layer_metadata(roi_layer, roi_items)
+                self._update_roi_layer_metadata(labels_layer, roi_items)
+                return roi_items
+            rois = []
+            for shape_index, shape in enumerate(roi_layer.data):
+                vertices = np.asarray(shape)
+                roi_item = self._build_roi_item(cube, roi_layer, shape_index, vertices)
+                if roi_item is not None:
+                    rois.append(roi_item)
+            rois.sort(key=lambda item: item["x_center"])
+            self._update_roi_layer_metadata(roi_layer, rois)
+            return rois
+        if labels_layer is not None:
             roi_items = self._collect_label_roi_items(cube, labels_layer)
             self._update_roi_layer_metadata(labels_layer, roi_items)
             return roi_items
-        roi_layer = self._find_roi_shapes_layer(spectral_layer_name)
-        if roi_layer is None:
-            return []
-        rois = []
-        for shape_index, shape in enumerate(roi_layer.data):
-            vertices = np.asarray(shape)
-            roi_item = self._build_roi_item(cube, roi_layer, shape_index, vertices)
-            if roi_item is not None:
-                rois.append(roi_item)
-        rois.sort(key=lambda item: item["x_center"])
-        self._update_roi_layer_metadata(roi_layer, rois)
-        return rois
+        return []
 
     def _export_selected_roi_dataset(self):
         if ROI_SPECTRUM_STORE.count() == 0:
