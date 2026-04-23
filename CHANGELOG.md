@@ -1,5 +1,19 @@
 # Changelog
 
+## 1.5.0 - 2026-04-23
+
+### OME-Zarr Browser
+
+- Split OME-Zarr scanning and loading out of `ND2 Spectral Export` into a dedicated `OME-Zarr Browser` dock widget.
+- Added a separate plugin command and manifest entry so users can launch `OME-Zarr Browser` directly from the napari Plugins menu.
+- Kept recursive `.zarr` discovery, row selection, preview loading, and batch open controls in the dedicated browser workflow.
+
+### Truecolor Rendering
+
+- Added optional automatic truecolor background cleaning during OME-Zarr loading.
+- Added `Low`, `Med`, and `High` cleaning strengths so users can tune how aggressively background signal is suppressed.
+- Applied background-aware foreground normalization so truecolor renders preserve brighter specimen regions after cleanup.
+
 ## 1.4.0 - 2026-04-05
 
 ### Spatial Ratio Analysis

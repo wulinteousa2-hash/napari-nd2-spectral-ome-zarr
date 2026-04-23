@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "napari-nd2-spectral-ome-zarr"
-version = "1.4.0"
+version = "1.5.0"
 description = "A napari plugin for Nikon ND2 spectral imaging workflows, including ND2-to-OME-Zarr conversion, OME-Zarr reading, spectral visualization, and ROI-based analysis across 400-740 nm."
 readme = "README.md"
 requires-python = ">=3.10"

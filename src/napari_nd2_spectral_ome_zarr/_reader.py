@@ -75,6 +75,8 @@ def _build_layer_payload(
     include_visible_layer: bool = True,
     include_truecolor_layer: bool = True,
     include_raw_layer: bool = False,
+    truecolor_auto_clean_background: bool = False,
+    truecolor_clean_strength: str = "med",
 ) -> list:
     layer_data = []
     shared_metadata = {
@@ -98,7 +100,13 @@ def _build_layer_payload(
         )
 
     if metadata["is_spectral"] and (include_visible_layer or include_truecolor_layer):
-        merged, rgb = render_visible_truecolor(spectral_plane, wavelengths_nm, use_gpu=use_gpu)
+        merged, rgb = render_visible_truecolor(
+            spectral_plane,
+            wavelengths_nm,
+            use_gpu=use_gpu,
+            auto_clean_background=truecolor_auto_clean_background,
+            clean_background_strength=truecolor_clean_strength,
+        )
         if include_visible_layer:
             layer_data.append(
                 (
@@ -134,6 +142,8 @@ def build_layer_data(
     include_truecolor_layer: bool = True,
     include_raw_layer: bool = False,
     zarr_use_preview: bool = True,
+    truecolor_auto_clean_background: bool = False,
+    truecolor_clean_strength: str = "med",
 ):
     file_stem = Path(input_path).stem
     if input_path.lower().endswith(".nd2"):
@@ -148,6 +158,8 @@ def build_layer_data(
             include_visible_layer=include_visible_layer,
             include_truecolor_layer=include_truecolor_layer,
             include_raw_layer=include_raw_layer,
+            truecolor_auto_clean_background=truecolor_auto_clean_background,
+            truecolor_clean_strength=truecolor_clean_strength,
         )
 
     if input_path.lower().endswith(".zarr"):
@@ -166,7 +178,13 @@ def build_layer_data(
             include_raw_layer=include_raw_layer,
         )
         if metadata["is_spectral"] and (include_visible_layer or include_truecolor_layer):
-            merged, rgb = render_visible_truecolor(render_plane, wavelengths_nm, use_gpu=use_gpu)
+            merged, rgb = render_visible_truecolor(
+                render_plane,
+                wavelengths_nm,
+                use_gpu=use_gpu,
+                auto_clean_background=truecolor_auto_clean_background,
+                clean_background_strength=truecolor_clean_strength,
+            )
             shared_metadata = {
                 "source_path": metadata.get("path"),
                 "dataset_metadata": metadata,

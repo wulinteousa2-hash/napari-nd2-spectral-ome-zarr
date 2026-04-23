@@ -15,26 +15,31 @@ Tested with spectral ND2 datasets generated from:
 
 ## Plugin Overview
 
-The plugin is organized as 4 subplugins:
+The plugin is organized as 5 subplugins:
 
 1. `ND2 Spectral Export`
 - convert single files or batches from ND2 to OME-Zarr
-- scan and open single or batch OME-Zarr datasets from the same workspace
-- validate image structure and dimensions such as axes order, shape, and wavelength metadata
+- preserve relative folder structure during batch export
+- track per-file conversion status, output paths, and failures
 
-2. `Spectral Viewer`
+2. `OME-Zarr Browser`
+- scan and open single or batch OME-Zarr datasets from a dedicated browser widget
+- validate image structure and dimensions such as axes order, shape, and wavelength metadata
+- optionally load visible, truecolor, and raw spectral views with preview-mode support and background-cleaned truecolor rendering
+
+3. `Spectral Viewer`
 - visualize spectral images as truecolor using visible-wavelength hue mapping
 - provide a single-channel grayscale image for morphology review and machine-learning workflows
 - read spectral intensity versus wavelength in normalized or absolute modes
 - support ROI generation and ROI-based spectral extraction
 
-3. `Spectral Analysis`
+4. `Spectral Analysis`
 - collect stored ROI datasets for downstream analysis
 - compute emission-ratio metrics using a user-defined split wavelength
 - support Student's t-test and one-way or two-way ANOVA
 - support blind-group analysis using PCA, feature comparison, user-selected clustering, and p-value statistics
 
-4. `Spatial Ratio Analysis`
+5. `Spatial Ratio Analysis`
 - compute kernel-based spatial ratio measurements within prepared ROI contexts
 - support shape-only, labels-only, or shape-refined-by-label kernel analysis
 - export raw kernel tables and summary tables to CSV
@@ -43,8 +48,9 @@ The plugin is organized as 4 subplugins:
 Features:
 
 - Read `.nd2` files into napari
-- Read `.zarr` and `.ome.zarr` through the plugin loader widget
+- Read `.zarr` and `.ome.zarr` through the dedicated `OME-Zarr Browser`
 - Build an estimated truecolor RGB view for spectral ranges spanning roughly 400 nm to 740 nm
+- Optionally auto-clean background during truecolor loading with low, medium, or high strength
 - Export the loaded ND2 spectral cube to OME-Zarr with multiscales and wavelength metadata
 - Plot ROI spectra from spectral OME-Zarr layers
 - Keep per-image ROI spectral datasets in memory during the napari session
@@ -66,15 +72,15 @@ Then start napari and open the plugin widgets from the Plugins menu.
 
 ## Interface Preview
 
-The screenshot below shows the main `ND2 Spectral Export` workflow used for conversion and OME-Zarr loading.
+The screenshot below shows the main `ND2 Spectral Export` workflow used for ND2-to-OME-Zarr conversion.
 
 ![ND2 Spectral Export workflow](docs/nd2_spectral_export_workflow.png)
 
 Highlighted areas:
 
 1. The conversion section defines the `ND2 source` and `OME-Zarr output` used for ND2-to-OME-Zarr export.
-2. `Scan Zarr Folder` is used to browse and discover converted OME-Zarr datasets.
-3. The table lists dataset properties such as file name, relative path, axes, shape, preview shape, wavelength range, and spectral status.
+2. `Convert To OME-Zarr` runs the current export job for the dropped source selection.
+3. The table lists queued ND2 files, conversion status, output locations, and per-file failures.
 
 Additional screenshots and supporting project assets can be stored and referenced from [`docs/`](docs/).
 
@@ -92,14 +98,15 @@ for myelin physicochemical analysis. It supports workflows involving:
 
 ## Dock Widgets
 
-The plugin now exposes 4 napari dock widgets:
+The plugin now exposes 5 napari dock widgets:
 
 - `ND2 Spectral Export`
+- `OME-Zarr Browser`
 - `Spectral Viewer`
 - `Spectral Analysis`
 - `Spatial Ratio Analysis`
 
-All 4 widgets are configured to float by default instead of staying docked in the main napari window.
+All 5 widgets are configured to float by default instead of staying docked in the main napari window.
 
 ## ND2 Spectral Export Workflow
 
@@ -108,13 +115,33 @@ All 4 widgets are configured to float by default instead of staying docked in th
 - ND2-to-OME-Zarr conversion from a dropped single file, subfolder, or parent folder
 - recursive batch ND2 conversion while preserving the original relative folder structure
 - root-level `manifest.json` export logging for converted datasets
-- OME-Zarr scanning and opening from the same widget
 - per-file conversion status, progress, and failure reporting in the shared table
 - conversion error collection in a dedicated troubleshooting panel
 
+### ND2 conversion behavior
+
+The ND2 conversion area uses:
+
+- `ND2 source`
+- `OME-Zarr output`
+- `Convert To OME-Zarr`
+
+Conversion status is shown with:
+
+- a fixed `Status:` message bar
+- a progress bar
+- a shared table listing queued ND2 files, converted outputs, and failures
+- a `Conversion Errors` panel for troubleshooting failed files
+
+If one ND2 file fails, the widget continues converting the remaining files and records the failed file in the error panel instead of aborting the whole batch.
+
+## OME-Zarr Browser Workflow
+
+`OME-Zarr Browser` handles scanning and opening exported or existing OME-Zarr datasets from a separate dock widget.
+
 ### OME-Zarr scanning and opening
 
-The widget supports drag-and-drop or browsing for:
+The browser supports drag-and-drop or browsing for:
 
 - one `.zarr` folder
 - one parent folder containing many `.zarr` datasets
@@ -125,7 +152,11 @@ The user can choose which views to open for selected Zarr datasets:
 - `Truecolor`
 - `Raw spectral`
 
-It also supports `Use preview pyramid level` for the display layers.
+It also supports:
+
+- `Preview` loading for display layers
+- optional `Clean bg` truecolor cleanup
+- `Low`, `Med`, or `High` cleanup strength
 
 The batch table shows:
 
@@ -143,29 +174,12 @@ The batch table shows:
 The user can:
 
 - browse or drag a Zarr source
-- click the prominent `Scan Zarr Folder` action between the source box and the table
-- select one row, multiple rows, or use `Select All` / `Clear All`
+- click `Scan`
+- select one row, multiple rows, or use `Select Visible` / `Clear Visible`
 - press `Space` to toggle the selected Zarr rows
-- open only the selected or checked datasets with `Open Selected Zarr`
+- open only the selected or checked datasets with `Open Checked`
 
-The chosen `Visible sum`, `Truecolor`, `Raw spectral`, and preview options are applied to all selected Zarr datasets in the batch open action.
-
-### ND2 conversion behavior
-
-The ND2 conversion area now uses:
-
-- `ND2 source`
-- `OME-Zarr output`
-- `Convert To OME-Zarr`
-
-Conversion status is shown with:
-
-- a fixed `Status:` message bar
-- a progress bar
-- a shared table listing queued ND2 files, converted outputs, and failures
-- a `Conversion Errors` panel for troubleshooting failed files
-
-If one ND2 file fails, the widget continues converting the remaining files and records the failed file in the error panel instead of aborting the whole batch.
+The chosen `Visible sum`, `Truecolor`, `Raw spectral`, preview, and background-cleaning options are applied to all selected Zarr datasets in the batch open action.
 
 ### Reader popup note
 
@@ -175,7 +189,7 @@ This plugin cannot reliably suppress that global napari chooser by itself.
 
 The intended workaround is:
 
-- use the plugin's own Zarr loader in `ND2 Spectral Export`
+- use the plugin's own Zarr loader in `OME-Zarr Browser`
 - open Zarr datasets from there instead of through napari's general file-open menu
 
 ### Visible sum definition

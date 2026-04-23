@@ -80,12 +80,58 @@ def cie_to_rgb(xyz: np.ndarray) -> np.ndarray:
     return (rgb * 255).astype(np.uint8)
 
 
+def _auto_clean_truecolor_background(
+    spectral_cube: np.ndarray,
+    *,
+    strength: str = "med",
+) -> tuple[np.ndarray, np.ndarray]:
+    presets = {
+        "low": {"bg_cut": 10.0, "bg_pct": 30.0, "black": 1.0, "full": 28.0},
+        "med": {"bg_cut": 18.0, "bg_pct": 40.0, "black": 2.0, "full": 36.0},
+        "high": {"bg_cut": 28.0, "bg_pct": 50.0, "black": 4.0, "full": 46.0},
+    }
+    config = presets.get(strength.lower(), presets["med"])
+    cube = np.asarray(spectral_cube, dtype=np.float32)
+    visible = cube.mean(axis=0)
+    low = float(np.percentile(visible, 1.0))
+    high = float(np.percentile(visible, 99.5))
+    if not np.isfinite(low) or not np.isfinite(high) or high <= low:
+        return cube, np.ones(visible.shape, dtype=np.float32)
+
+    background_threshold = float(np.percentile(visible, config["bg_cut"]))
+    background_mask = visible <= background_threshold
+    if int(background_mask.sum()) >= max(16, cube.shape[1] * cube.shape[2] // 200):
+        background_spectrum = np.percentile(cube[:, background_mask], config["bg_pct"], axis=1).astype(np.float32)
+        cube = cube - background_spectrum[:, None, None]
+        cube = np.clip(cube, 0.0, None)
+
+    cleaned_visible = cube.mean(axis=0)
+    black = float(np.percentile(cleaned_visible, config["black"]))
+    full = float(np.percentile(cleaned_visible, config["full"]))
+    if not np.isfinite(black) or not np.isfinite(full) or full <= black:
+        return cube, np.ones(visible.shape, dtype=np.float32)
+
+    alpha = np.clip((cleaned_visible - black) / (full - black + 1e-8), 0.0, 1.0)
+    alpha = alpha * alpha * (3.0 - 2.0 * alpha)
+    alpha = uniform_filter(alpha.astype(np.float32), size=3, mode="nearest")
+    return cube, np.clip(alpha, 0.0, 1.0).astype(np.float32)
+
+
 def estimate_truecolor_rgb(
     spectral_cube: np.ndarray,
     wavelengths_nm: np.ndarray,
     gamma: float = 1.4,
     use_gpu: bool = False,
+    auto_clean_background: bool = False,
+    clean_background_strength: str = "med",
 ) -> np.ndarray:
+    alpha_mask = None
+    if auto_clean_background:
+        spectral_cube, alpha_mask = _auto_clean_truecolor_background(
+            spectral_cube,
+            strength=clean_background_strength,
+        )
+
     xp = np
     if use_gpu and gpu_available():
         import cupy as cp
@@ -100,15 +146,27 @@ def estimate_truecolor_rgb(
         raise ValueError("Wavelength count does not match spectral channel count")
 
     cube = spectral_cube - spectral_cube.min()
-    cube /= cube.max() + 1e-8
+    if alpha_mask is not None and bool(np.any(alpha_mask > 0.1)):
+        alpha_mask_xp = xp.asarray(alpha_mask)
+        foreground_mask_xp = alpha_mask_xp > 0.1
+        cube /= xp.max(cube[:, foreground_mask_xp]) + 1e-8
+    else:
+        alpha_mask_xp = None
+        foreground_mask_xp = None
+        cube /= cube.max() + 1e-8
 
     xyz_weights = xp.asarray(approximate_cie_xyz(wavelengths_nm), dtype=xp.float32)
     xyz = xp.tensordot(cube.transpose(1, 2, 0), xyz_weights, axes=([2], [0]))
-    xyz /= xp.max(xyz, axis=(0, 1), keepdims=True) + 1e-8
+    if foreground_mask_xp is not None:
+        xyz /= xp.max(xyz[foreground_mask_xp], axis=0, keepdims=True) + 1e-8
+    else:
+        xyz /= xp.max(xyz, axis=(0, 1), keepdims=True) + 1e-8
 
     rgb = _xyz_to_srgb(xyz, xp)
     if gamma != 1.0:
         rgb = xp.power(xp.clip(rgb, 0.0, 1.0), gamma)
+    if alpha_mask_xp is not None:
+        rgb = rgb * alpha_mask_xp[..., None]
 
     if xp is not np:
         rgb = xp.asnumpy(rgb)
@@ -122,8 +180,19 @@ def summed_visible_image(spectral_cube: np.ndarray) -> np.ndarray:
     return cube.mean(axis=0)
 
 
-def _render_truecolor_cpu(spectral_cube: np.ndarray, wavelengths_nm: np.ndarray) -> np.ndarray:
-    return estimate_truecolor_rgb(spectral_cube, wavelengths_nm, use_gpu=False)
+def _render_truecolor_cpu(
+    spectral_cube: np.ndarray,
+    wavelengths_nm: np.ndarray,
+    auto_clean_background: bool = False,
+    clean_background_strength: str = "med",
+) -> np.ndarray:
+    return estimate_truecolor_rgb(
+        spectral_cube,
+        wavelengths_nm,
+        use_gpu=False,
+        auto_clean_background=auto_clean_background,
+        clean_background_strength=clean_background_strength,
+    )
 
 
 def _render_visible_cpu(spectral_cube: np.ndarray) -> np.ndarray:
@@ -135,22 +204,45 @@ def render_visible_truecolor(
     wavelengths_nm: np.ndarray,
     use_gpu: bool = False,
     max_workers: int | None = None,
+    auto_clean_background: bool = False,
+    clean_background_strength: str = "med",
 ) -> tuple[np.ndarray, np.ndarray]:
     spectral_cube = np.asarray(spectral_cube, dtype=np.float32)
     wavelengths_nm = np.asarray(wavelengths_nm, dtype=np.float32)
 
     if use_gpu and gpu_available():
         visible = summed_visible_image(spectral_cube)
-        truecolor = estimate_truecolor_rgb(spectral_cube, wavelengths_nm, use_gpu=True)
+        truecolor = estimate_truecolor_rgb(
+            spectral_cube,
+            wavelengths_nm,
+            use_gpu=True,
+            auto_clean_background=auto_clean_background,
+            clean_background_strength=clean_background_strength,
+        )
         return visible, truecolor
 
     worker_count = max_workers or max(2, min(4, (os.cpu_count() or 4) // 2))
     if worker_count <= 1:
-        return summed_visible_image(spectral_cube), estimate_truecolor_rgb(spectral_cube, wavelengths_nm, use_gpu=False)
+        return (
+            summed_visible_image(spectral_cube),
+            estimate_truecolor_rgb(
+                spectral_cube,
+                wavelengths_nm,
+                use_gpu=False,
+                auto_clean_background=auto_clean_background,
+                clean_background_strength=clean_background_strength,
+            ),
+        )
 
     with ProcessPoolExecutor(max_workers=min(2, worker_count)) as executor:
         visible_future = executor.submit(_render_visible_cpu, spectral_cube)
-        truecolor_future = executor.submit(_render_truecolor_cpu, spectral_cube, wavelengths_nm)
+        truecolor_future = executor.submit(
+            _render_truecolor_cpu,
+            spectral_cube,
+            wavelengths_nm,
+            auto_clean_background,
+            clean_background_strength,
+        )
         visible = visible_future.result()
         truecolor = truecolor_future.result()
     return visible, truecolor

@@ -17,6 +17,10 @@ contributions:
       title: ND2 Spectral Export
       python_name: napari_nd2_spectral_ome_zarr._widget:Nd2SpectralWidget
 
+    - id: napari-nd2-spectral-ome-zarr.ome_zarr_browser
+      title: OME-Zarr Browser
+      python_name: napari_nd2_spectral_ome_zarr._ome_zarr_browser:OmeZarrBrowserWidget
+
     - id: napari-nd2-spectral-ome-zarr.spectral_viewer
       title: Spectral Viewer
       python_name: napari_nd2_spectral_ome_zarr._spectral_viewer:SpectralViewerWidget
@@ -40,6 +44,9 @@ contributions:
   widgets:
     - command: napari-nd2-spectral-ome-zarr.widget
       display_name: ND2 Spectral Export
+
+    - command: napari-nd2-spectral-ome-zarr.ome_zarr_browser
+      display_name: OME-Zarr Browser
 
     - command: napari-nd2-spectral-ome-zarr.spectral_viewer
       display_name: Spectral Viewer

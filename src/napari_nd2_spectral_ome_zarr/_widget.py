@@ -7,10 +7,8 @@ from pathlib import Path
 from concurrent.futures import ProcessPoolExecutor, as_completed
 
 from qtpy.QtCore import QObject, QSize, Qt, QThread, QTimer, Signal
-from qtpy.QtGui import QColor, QFontMetrics, QPalette
+from qtpy.QtGui import QFontMetrics, QPalette
 from qtpy.QtWidgets import (
-    QAbstractItemView,
-    QCheckBox,
     QFileDialog,
     QFrame,
     QGroupBox,
@@ -30,8 +28,6 @@ from qtpy.QtWidgets import (
 from ._nd2 import load_nd2_dataset
 from ._ome_zarr import export_dataset_to_ome_zarr
 from ._qt_utils import float_parent_dock_later
-from ._reader import build_layer_data, inspect_ome_zarr
-from ._spectral import get_gpu_status_text, gpu_available
 
 
 def _convert_one_nd2_to_ome_zarr(nd2_path: str, input_root: str, output_root: str) -> dict:
@@ -235,17 +231,6 @@ class DropPathBox(QFrame):
         self.path_edit.setEnabled(enabled)
 
 
-class SelectableTableWidget(QTableWidget):
-    toggle_rows_requested = Signal()
-
-    def keyPressEvent(self, event):
-        if event.key() == Qt.Key_Space:
-            self.toggle_rows_requested.emit()
-            event.accept()
-            return
-        super().keyPressEvent(event)
-
-
 class Nd2SpectralWidget(QWidget):
     ND2_BATCH_COLUMNS = [
         "name",
@@ -254,16 +239,6 @@ class Nd2SpectralWidget(QWidget):
         "output",
         "error",
     ]
-    ZARR_BATCH_COLUMNS = [
-        "open",
-        "name",
-        "relative_path",
-        "axes",
-        "shape",
-        "preview_shape",
-        "wavelengths",
-        "spectral",
-    ]
 
     def __init__(self, napari_viewer):
         super().__init__()
@@ -271,21 +246,13 @@ class Nd2SpectralWidget(QWidget):
         self._dataset = None
         self._batch_thread = None
         self._batch_worker = None
-        self._batch_table_mode = "none"
         self._nd2_batch_entries: list[dict] = []
         self._status_message = "Ready."
-        self._zarr_batch_entries: list[dict] = []
-        self._updating_zarr_table = False
 
         self.batch_input_box = DropPathBox(
             "ND2 source",
             "Drag a folder, subfolder, or single .nd2 file here. Folder inputs are scanned recursively.",
             "Drop ND2 file or folder here",
-        )
-        self.zarr_scan_box = DropPathBox(
-            "OME-Zarr source",
-            "Drag a folder to scan all nested .zarr datasets, or drag one .zarr folder to open just that dataset.",
-            "Drop .zarr folder or parent folder here",
         )
         self.output_dir_box = DropPathBox(
             "OME-Zarr output",
@@ -306,46 +273,12 @@ class Nd2SpectralWidget(QWidget):
             "font-weight: 600;"
             "}"
         )
-        self.gpu_checkbox = QCheckBox("Use GPU for truecolor render")
-        self.gpu_checkbox.setChecked(gpu_available())
-        self.gpu_checkbox.setEnabled(gpu_available())
-        self.gpu_checkbox.stateChanged.connect(self._update_gpu_indicator)
-        self.gpu_indicator = QLabel()
-        self.gpu_indicator.setAlignment(Qt.AlignCenter)
         self.worker_count_edit = QLineEdit()
         self.worker_count_edit.setText(str(self._default_worker_count()))
-        self.zarr_gray_checkbox = QCheckBox("Visible sum")
-        self.zarr_truecolor_checkbox = QCheckBox("Truecolor")
-        self.zarr_truecolor_checkbox.setChecked(True)
-        self.zarr_raw_checkbox = QCheckBox("Raw spectral")
-        self.zarr_preview_checkbox = QCheckBox("Use preview pyramid level")
-        self.zarr_preview_checkbox.setChecked(True)
-        self.zarr_batch_table = SelectableTableWidget()
-        self.zarr_batch_table.setAlternatingRowColors(False)
-        self.zarr_batch_table.setMinimumHeight(320)
-        self.zarr_batch_table.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
-        self.zarr_batch_table.setSelectionBehavior(QAbstractItemView.SelectRows)
-        self.zarr_batch_table.setSelectionMode(QAbstractItemView.ExtendedSelection)
-        self.zarr_batch_table.setStyleSheet(
-            "QTableWidget::indicator {"
-            "width: 16px;"
-            "height: 16px;"
-            "border: 1px solid #374151;"
-            "border-radius: 3px;"
-            "background-color: #f8fafc;"
-            "}"
-            "QTableWidget::indicator:checked {"
-            "background-color: #2563eb;"
-            "border: 1px solid #1d4ed8;"
-            "image: none;"
-            "}"
-            "QTableWidget::indicator:unchecked {"
-            "background-color: #f8fafc;"
-            "border: 1px solid #6b7280;"
-            "}"
-        )
-        self.zarr_batch_table.toggle_rows_requested.connect(self._toggle_selected_zarr_rows)
-        self.zarr_batch_table.itemSelectionChanged.connect(self._sync_selected_rows_to_zarr_checks)
+        self.batch_table = QTableWidget()
+        self.batch_table.setAlternatingRowColors(False)
+        self.batch_table.setMinimumHeight(280)
+        self.batch_table.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
         self.export_progress_bar = QProgressBar()
         self.export_progress_bar.setRange(0, 1)
         self.export_progress_bar.setValue(0)
@@ -356,30 +289,9 @@ class Nd2SpectralWidget(QWidget):
         self.export_error_log.setMaximumHeight(96)
         self.export_error_log.setSizePolicy(QSizePolicy.Preferred, QSizePolicy.Fixed)
         self.export_error_log.setPlaceholderText("Conversion failures will appear here for troubleshooting.")
-        self._configure_zarr_batch_table_palette()
-        self._update_gpu_indicator()
+        self._configure_batch_table_palette()
         self.batch_input_box.pathDropped.connect(self._handle_batch_input_dropped)
-        self.zarr_scan_box.pathDropped.connect(self._handle_zarr_scan_dropped)
         self.output_dir_box.pathDropped.connect(self._handle_output_dir_dropped)
-
-        browse_zarr_batch_root = QPushButton("Browse Zarr Folder")
-        browse_zarr_batch_root.clicked.connect(self._pick_zarr_batch_root)
-
-        scan_zarr_button = QPushButton("Scan Zarr Folder")
-        scan_zarr_button.setStyleSheet(
-            "QPushButton { background-color: #2563eb; color: white; font-weight: 700; padding: 8px 12px; border-radius: 6px; }"
-            "QPushButton:hover { background-color: #1d4ed8; }"
-        )
-        scan_zarr_button.clicked.connect(self._scan_zarr_batch_root)
-
-        self.select_all_zarr_button = QPushButton("Select All")
-        self.select_all_zarr_button.clicked.connect(lambda: self._set_all_zarr_rows_checked(True))
-
-        self.clear_all_zarr_button = QPushButton("Clear All")
-        self.clear_all_zarr_button.clicked.connect(lambda: self._set_all_zarr_rows_checked(False))
-
-        self.open_selected_zarr_button = QPushButton("Open Selected Zarr")
-        self.open_selected_zarr_button.clicked.connect(self._open_selected_zarr_batch)
 
         browse_batch_input = QPushButton("Browse Folder")
         browse_batch_input.clicked.connect(self._pick_batch_input_path)
@@ -414,32 +326,7 @@ class Nd2SpectralWidget(QWidget):
         output_row.addWidget(browse_output, 0)
         export_layout.addLayout(output_row)
 
-        zarr_source_row = QHBoxLayout()
-        zarr_source_row.addWidget(self.zarr_scan_box, 1)
-        zarr_source_row.addWidget(QLabel("or"))
-        zarr_source_row.addWidget(browse_zarr_batch_root, 0)
-        export_layout.addLayout(zarr_source_row)
-
-        export_layout.addWidget(scan_zarr_button)
-
-        zarr_options_row = QHBoxLayout()
-        zarr_options_row.addWidget(self.zarr_gray_checkbox)
-        zarr_options_row.addWidget(self.zarr_truecolor_checkbox)
-        zarr_options_row.addWidget(self.zarr_raw_checkbox)
-        zarr_options_row.addWidget(self.zarr_preview_checkbox)
-        export_layout.addLayout(zarr_options_row)
-
-        zarr_batch_actions = QHBoxLayout()
-        zarr_batch_actions.addWidget(self.select_all_zarr_button)
-        zarr_batch_actions.addWidget(self.clear_all_zarr_button)
-        zarr_batch_actions.addWidget(self.open_selected_zarr_button)
-        export_layout.addLayout(zarr_batch_actions)
-        export_layout.addWidget(self.zarr_batch_table, 1)
-
-        gpu_row = QHBoxLayout()
-        gpu_row.addWidget(self.gpu_checkbox)
-        gpu_row.addWidget(self.gpu_indicator)
-        export_layout.addLayout(gpu_row)
+        export_layout.addWidget(self.batch_table, 1)
 
         export_layout.addWidget(QLabel("Batch worker count"))
         export_layout.addWidget(self.worker_count_edit)
@@ -475,14 +362,6 @@ class Nd2SpectralWidget(QWidget):
         super().resizeEvent(event)
         self._update_status_label()
 
-    def _update_gpu_indicator(self):
-        enabled = self.gpu_checkbox.isChecked() and self.gpu_checkbox.isEnabled()
-        self.gpu_indicator.setText(get_gpu_status_text(enabled))
-        if enabled:
-            self.gpu_indicator.setStyleSheet("background-color: #1f7a1f; color: white; padding: 4px;")
-        else:
-            self.gpu_indicator.setStyleSheet("background-color: #6f1d1b; color: white; padding: 4px;")
-
     def _pick_batch_input_path(self):
         path = QFileDialog.getExistingDirectory(self, "Select ND2 input folder")
         if path:
@@ -512,22 +391,6 @@ class Nd2SpectralWidget(QWidget):
     def _handle_output_dir_dropped(self, path: str):
         output_path = Path(path)
         self.output_dir_box.setText(str(output_path if output_path.is_dir() else output_path.parent))
-
-    def _pick_zarr_batch_root(self):
-        path = QFileDialog.getExistingDirectory(self, "Select folder containing OME-Zarr datasets")
-        if path:
-            self.zarr_scan_box.setText(path)
-
-    def _handle_zarr_scan_dropped(self, path: str):
-        self.zarr_scan_box.setText(path)
-        selected_path = Path(path)
-        if selected_path.is_dir() and selected_path.suffix.lower() == ".zarr":
-            self._scan_zarr_batch_root()
-            return
-        if selected_path.is_dir():
-            self._scan_zarr_batch_root()
-            return
-        self._set_status("Drop a folder or .zarr directory into the OME-Zarr source box.")
 
     def _scan_nd2_batch_source(self, source_text: str | None = None):
         path_text = (source_text or self.batch_input_box.text()).strip()
@@ -567,119 +430,19 @@ class Nd2SpectralWidget(QWidget):
                 f"Loaded {len(entries)} ND2 file(s) for conversion. Original folder structure will be preserved."
             )
 
-    def _scan_zarr_batch_root(self):
-        root_text = self.zarr_scan_box.text().strip()
-        if not root_text:
-            self._set_status("Choose or drop a folder containing .zarr datasets first.")
-            return
-        root = Path(root_text)
-        if not root.exists():
-            self._set_status("Selected OME-Zarr source does not exist.")
-            return
-        if root.is_dir() and root.suffix.lower() == ".zarr":
-            zarr_paths = [root]
-            scan_root = root.parent
-        else:
-            zarr_paths = sorted({path for path in root.rglob("*.zarr") if path.is_dir()})
-            scan_root = root
-        if not zarr_paths:
-            self._zarr_batch_entries = []
-            self._populate_zarr_batch_table()
-            self._set_status("No .zarr folders found in the selected directory.")
-            return
-
-        entries = []
-        for path in zarr_paths:
-            try:
-                info = inspect_ome_zarr(str(path))
-                wavelength_text = (
-                    f"{info['wavelength_count']} ({info['wavelength_min_nm']:.1f}-{info['wavelength_max_nm']:.1f} nm)"
-                    if info["wavelength_count"] > 0 and info["wavelength_min_nm"] is not None and info["wavelength_max_nm"] is not None
-                    else "0"
-                )
-                entries.append(
-                    {
-                        "open": True,
-                        "path": str(path),
-                        "name": info["name"],
-                        "relative_path": f"./{path.parent.relative_to(scan_root)}/" if path.parent != scan_root else "./",
-                        "axes": "".join(info["axes"]),
-                        "shape": str(info["shape"]),
-                        "preview_shape": str(info["preview_shape"]),
-                        "wavelengths": wavelength_text,
-                        "spectral": str(info["is_spectral"]),
-                    }
-                )
-            except Exception as exc:
-                entries.append(
-                    {
-                        "open": False,
-                        "path": str(path),
-                        "name": path.name,
-                        "relative_path": f"./{path.parent.relative_to(scan_root)}/" if path.parent != scan_root else "./",
-                        "axes": "error",
-                        "shape": "error",
-                        "preview_shape": "error",
-                        "wavelengths": str(exc),
-                        "spectral": "error",
-                    }
-                )
-        self._zarr_batch_entries = entries
-        self._populate_zarr_batch_table()
-        self._set_status(f"Found {len(entries)} Zarr dataset(s).")
-
-    def _populate_zarr_batch_table(self):
-        self._batch_table_mode = "zarr"
-        self.select_all_zarr_button.setEnabled(True)
-        self.clear_all_zarr_button.setEnabled(True)
-        self.open_selected_zarr_button.setEnabled(True)
-        path_group_colors: dict[str, tuple[QColor, QColor]] = {}
-        self._updating_zarr_table = True
-        self.zarr_batch_table.clear()
-        self.zarr_batch_table.setColumnCount(len(self.ZARR_BATCH_COLUMNS))
-        self.zarr_batch_table.setHorizontalHeaderLabels(self.ZARR_BATCH_COLUMNS)
-        self.zarr_batch_table.setRowCount(len(self._zarr_batch_entries))
-        for row_index, entry in enumerate(self._zarr_batch_entries):
-            relative_path = str(entry.get("relative_path", ""))
-            if relative_path not in path_group_colors:
-                if len(path_group_colors) % 2 == 0:
-                    path_group_colors[relative_path] = (QColor("#dbeafe"), QColor("#111827"))
-                else:
-                    path_group_colors[relative_path] = (QColor("#dcfce7"), QColor("#111827"))
-            background_color, foreground_color = path_group_colors[relative_path]
-            for column_index, column_name in enumerate(self.ZARR_BATCH_COLUMNS):
-                if column_name == "open":
-                    item = QTableWidgetItem()
-                    item.setCheckState(Qt.Checked if entry["open"] else Qt.Unchecked)
-                    item.setFlags((item.flags() | Qt.ItemIsUserCheckable | Qt.ItemIsEnabled) & ~Qt.ItemIsEditable)
-                else:
-                    item = QTableWidgetItem(str(entry[column_name]))
-                    item.setFlags(item.flags() & ~Qt.ItemIsEditable)
-                self._style_zarr_batch_item(item, row_index, background_color=background_color, foreground_color=foreground_color)
-                item.setData(Qt.UserRole, row_index)
-                self.zarr_batch_table.setItem(row_index, column_index, item)
-        self.zarr_batch_table.resizeColumnsToContents()
-        self._updating_zarr_table = False
-
     def _populate_nd2_batch_table(self):
-        self._batch_table_mode = "nd2"
-        self.select_all_zarr_button.setEnabled(False)
-        self.clear_all_zarr_button.setEnabled(False)
-        self.open_selected_zarr_button.setEnabled(False)
-        self._updating_zarr_table = True
-        self.zarr_batch_table.clear()
-        self.zarr_batch_table.setColumnCount(len(self.ND2_BATCH_COLUMNS))
-        self.zarr_batch_table.setHorizontalHeaderLabels(self.ND2_BATCH_COLUMNS)
-        self.zarr_batch_table.setRowCount(len(self._nd2_batch_entries))
+        self.batch_table.clear()
+        self.batch_table.setColumnCount(len(self.ND2_BATCH_COLUMNS))
+        self.batch_table.setHorizontalHeaderLabels(self.ND2_BATCH_COLUMNS)
+        self.batch_table.setRowCount(len(self._nd2_batch_entries))
         for row_index, entry in enumerate(self._nd2_batch_entries):
             for column_index, column_name in enumerate(self.ND2_BATCH_COLUMNS):
                 item = QTableWidgetItem(str(entry.get(column_name, "")))
                 item.setFlags(item.flags() & ~Qt.ItemIsEditable)
-                self._style_zarr_batch_item(item, row_index)
+                self._style_batch_item(item)
                 item.setData(Qt.UserRole, entry["path"])
-                self.zarr_batch_table.setItem(row_index, column_index, item)
-        self.zarr_batch_table.resizeColumnsToContents()
-        self._updating_zarr_table = False
+                self.batch_table.setItem(row_index, column_index, item)
+        self.batch_table.resizeColumnsToContents()
 
     def _update_nd2_batch_row(self, source_path: str, status: str, output_rel: str, error_text: str):
         for row_index, entry in enumerate(self._nd2_batch_entries):
@@ -695,16 +458,16 @@ class Nd2SpectralWidget(QWidget):
                 ("error", entry["error"]),
             ):
                 column_index = self.ND2_BATCH_COLUMNS.index(column_name)
-                item = self.zarr_batch_table.item(row_index, column_index)
+                item = self.batch_table.item(row_index, column_index)
                 if item is None:
                     item = QTableWidgetItem("")
                     item.setFlags(item.flags() & ~Qt.ItemIsEditable)
-                    self.zarr_batch_table.setItem(row_index, column_index, item)
+                    self.batch_table.setItem(row_index, column_index, item)
                 item.setText(str(value))
             break
 
-    def _configure_zarr_batch_table_palette(self):
-        palette = self.zarr_batch_table.palette()
+    def _configure_batch_table_palette(self):
+        palette = self.batch_table.palette()
         text_color = palette.color(QPalette.Text)
         base_color = palette.color(QPalette.Base)
 
@@ -715,101 +478,12 @@ class Nd2SpectralWidget(QWidget):
             palette.setColor(group, QPalette.Base, base_color)
             palette.setColor(group, QPalette.AlternateBase, base_color)
 
-        self.zarr_batch_table.setPalette(palette)
+        self.batch_table.setPalette(palette)
 
-    def _style_zarr_batch_item(
-        self,
-        item: QTableWidgetItem,
-        row_index: int,
-        *,
-        background_color: QColor | None = None,
-        foreground_color: QColor | None = None,
-    ):
-        del row_index
-        palette = self.zarr_batch_table.palette()
-        item.setForeground(foreground_color or palette.color(QPalette.Text))
-        item.setBackground(background_color or palette.color(QPalette.Base))
-
-    def _selected_table_rows(self) -> list[int]:
-        selection_model = self.zarr_batch_table.selectionModel()
-        if selection_model is None:
-            return []
-        return sorted({index.row() for index in selection_model.selectedRows()})
-
-    def _sync_selected_rows_to_zarr_checks(self):
-        if self._batch_table_mode != "zarr" or self._updating_zarr_table:
-            return
-        selected_rows = set(self._selected_table_rows())
-        for row_index, entry in enumerate(self._zarr_batch_entries):
-            should_check = row_index in selected_rows
-            entry["open"] = should_check
-            item = self.zarr_batch_table.item(row_index, 0)
-            if item is not None:
-                item.setCheckState(Qt.Checked if should_check else Qt.Unchecked)
-
-    def _toggle_selected_zarr_rows(self):
-        if self._batch_table_mode != "zarr" or self._updating_zarr_table:
-            return
-        selected_rows = self._selected_table_rows()
-        if not selected_rows:
-            return
-        any_unchecked = any(not self._zarr_batch_entries[row_index]["open"] for row_index in selected_rows)
-        for row_index in selected_rows:
-            self._zarr_batch_entries[row_index]["open"] = any_unchecked
-            item = self.zarr_batch_table.item(row_index, 0)
-            if item is not None:
-                item.setCheckState(Qt.Checked if any_unchecked else Qt.Unchecked)
-
-    def _set_all_zarr_rows_checked(self, checked: bool):
-        if self._batch_table_mode != "zarr":
-            return
-        if not self._zarr_batch_entries:
-            self._set_status("No Zarr datasets loaded into the batch table.")
-            return
-        for entry in self._zarr_batch_entries:
-            entry["open"] = checked
-        self._populate_zarr_batch_table()
-        self._set_status(
-            f"{'Selected' if checked else 'Cleared'} {len(self._zarr_batch_entries)} Zarr dataset(s) in the batch table."
-        )
-
-    def _open_selected_zarr_batch(self):
-        if self._batch_table_mode != "zarr":
-            self._set_status("Scan OME-Zarr sources first to open selected datasets.")
-            return
-        selected_entries = []
-        for row_index, entry in enumerate(self._zarr_batch_entries):
-            item = self.zarr_batch_table.item(row_index, 0)
-            is_checked = item is not None and item.checkState() == Qt.Checked
-            entry["open"] = is_checked
-            if is_checked:
-                selected_entries.append(entry)
-        if not selected_entries:
-            self._set_status("Select at least one Zarr dataset in the batch table.")
-            return
-        if not (self.zarr_gray_checkbox.isChecked() or self.zarr_truecolor_checkbox.isChecked() or self.zarr_raw_checkbox.isChecked()):
-            self._set_status("Select at least one Zarr view to open.")
-            return
-        opened_count = 0
-        for entry in selected_entries:
-            try:
-                for data, kwargs, layer_type in build_layer_data(
-                    entry["path"],
-                    use_gpu=self._use_gpu(),
-                    include_visible_layer=self.zarr_gray_checkbox.isChecked(),
-                    include_truecolor_layer=self.zarr_truecolor_checkbox.isChecked(),
-                    include_raw_layer=self.zarr_raw_checkbox.isChecked(),
-                    zarr_use_preview=self.zarr_preview_checkbox.isChecked(),
-                ):
-                    self.viewer.add_image(data, **kwargs) if layer_type == "image" else None
-                opened_count += 1
-            except Exception as exc:
-                self._set_status(f"Failed to open {Path(entry['path']).name}: {exc}")
-                return
-        self._set_status(f"Opened {opened_count} selected Zarr dataset(s).")
-
-    def _use_gpu(self) -> bool:
-        return self.gpu_checkbox.isEnabled() and self.gpu_checkbox.isChecked()
+    def _style_batch_item(self, item: QTableWidgetItem):
+        palette = self.batch_table.palette()
+        item.setForeground(palette.color(QPalette.Text))
+        item.setBackground(palette.color(QPalette.Base))
 
     def _reset_export_feedback(self, *, total: int):
         self.export_progress_bar.setRange(0, max(1, total))
@@ -854,7 +528,7 @@ class Nd2SpectralWidget(QWidget):
             return
 
         self._reset_export_feedback(total=len(nd2_paths))
-        if self._batch_table_mode != "nd2" or len(self._nd2_batch_entries) != len(nd2_paths):
+        if len(self._nd2_batch_entries) != len(nd2_paths):
             self._scan_nd2_batch_source(input_path)
         for entry in self._nd2_batch_entries:
             entry["status"] = "Queued"
