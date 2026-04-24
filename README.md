@@ -23,8 +23,9 @@ The plugin is organized as 5 subplugins:
 - track per-file conversion status, output paths, and failures
 
 2. `OME-Zarr Browser`
-- scan and open single or batch OME-Zarr datasets from a dedicated browser widget
+- browse, filter, validate, and open single or batch OME-Zarr datasets from a dedicated browser widget
 - validate image structure and dimensions such as axes order, shape, and wavelength metadata
+- support whole-word search, dataset-type filtering, and fast row-based opening for spectral and non-spectral datasets
 - optionally load visible, truecolor, and raw spectral views with preview-mode support and background-cleaned truecolor rendering
 
 3. `Spectral Viewer`
@@ -48,7 +49,7 @@ The plugin is organized as 5 subplugins:
 Features:
 
 - Read `.nd2` files into napari
-- Read `.zarr` and `.ome.zarr` through the dedicated `OME-Zarr Browser`
+- Browse and open `.zarr` and `.ome.zarr` datasets through the dedicated `OME-Zarr Browser`
 - Build an estimated truecolor RGB view for spectral ranges spanning roughly 400 nm to 740 nm
 - Optionally auto-clean background during truecolor loading with low, medium, or high strength
 - Export the loaded ND2 spectral cube to OME-Zarr with multiscales and wavelength metadata
@@ -137,7 +138,7 @@ If one ND2 file fails, the widget continues converting the remaining files and r
 
 ## OME-Zarr Browser Workflow
 
-`OME-Zarr Browser` handles scanning and opening exported or existing OME-Zarr datasets from a separate dock widget.
+`OME-Zarr Browser` is a dedicated dataset browser for exported or existing OME-Zarr folders. It is meant to be its own workflow for scanning, filtering, validating, and opening OME-Zarr datasets from a separate dock widget.
 
 ### OME-Zarr scanning and opening
 
@@ -145,6 +146,12 @@ The browser supports drag-and-drop or browsing for:
 
 - one `.zarr` folder
 - one parent folder containing many `.zarr` datasets
+
+The browser can be used for:
+
+- spectral OME-Zarr datasets with wavelength metadata
+- non-spectral OME-Zarr datasets that still need quick inspection and opening
+- mixed folders where spectral and non-spectral datasets are stored together
 
 The user can choose which views to open for selected Zarr datasets:
 
@@ -154,6 +161,9 @@ The user can choose which views to open for selected Zarr datasets:
 
 It also supports:
 
+- whole-word dataset filtering across name, path, wavelength, and shape metadata
+- multiple search keywords separated by spaces or commas
+- dataset-type filtering for `All datasets`, `Spectral only`, `Non-spectral only`, and `Errors only`
 - `Preview` loading for display layers
 - optional `Clean bg` truecolor cleanup
 - `Low`, `Med`, or `High` cleanup strength
@@ -177,6 +187,8 @@ The user can:
 - click `Scan`
 - select one row, multiple rows, or use `Select Visible` / `Clear Visible`
 - press `Space` to toggle the selected Zarr rows
+- double-click a row to open one dataset directly
+- press `Enter` / `Return` to open checked datasets
 - open only the selected or checked datasets with `Open Checked`
 
 The chosen `Visible sum`, `Truecolor`, `Raw spectral`, preview, and background-cleaning options are applied to all selected Zarr datasets in the batch open action.

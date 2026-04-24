@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from pathlib import Path
+import re
 
 from qtpy.QtCore import QSize, Qt, QTimer, Signal
 from qtpy.QtGui import QColor, QFontMetrics, QPalette
@@ -10,6 +11,7 @@ from qtpy.QtWidgets import (
     QComboBox,
     QFileDialog,
     QFrame,
+    QGridLayout,
     QGroupBox,
     QHBoxLayout,
     QLabel,
@@ -24,7 +26,7 @@ from qtpy.QtWidgets import (
 
 from ._qt_utils import float_parent_dock_later
 from ._reader import build_layer_data, inspect_ome_zarr
-from ._spectral import get_gpu_status_text, gpu_available
+from ._spectral import get_gpu_status_text, gpu_available, gpu_unavailable_reason
 
 
 class DropPathLineEdit(QLineEdit):
@@ -117,10 +119,15 @@ class DropPathBox(QFrame):
 
 class SelectableTableWidget(QTableWidget):
     toggle_rows_requested = Signal()
+    open_requested = Signal()
 
     def keyPressEvent(self, event):
         if event.key() == Qt.Key_Space:
             self.toggle_rows_requested.emit()
+            event.accept()
+            return
+        if event.key() in {Qt.Key_Return, Qt.Key_Enter}:
+            self.open_requested.emit()
             event.accept()
             return
         super().keyPressEvent(event)
@@ -165,14 +172,37 @@ class OmeZarrBrowserWidget(QWidget):
             "}"
         )
         self.filter_edit = QLineEdit()
-        self.filter_edit.setPlaceholderText("Find name, path, date")
+        self.filter_edit.setPlaceholderText("Whole-word filter. Use space or comma to add keywords")
+        self.filter_edit.setClearButtonEnabled(True)
+        self.filter_edit.setMinimumHeight(34)
+        self.filter_edit.setStyleSheet(
+            "QLineEdit {"
+            "border: 1px solid #4b5563;"
+            "border-radius: 6px;"
+            "padding: 6px 10px;"
+            "background-color: #111827;"
+            "color: #f9fafb;"
+            "}"
+            "QLineEdit:focus {"
+            "border: 1px solid #60a5fa;"
+            "background-color: #172033;"
+            "}"
+        )
         self.filter_edit.textChanged.connect(self._apply_filter)
+        self.filter_help_label = QLabel("Whole-word search across name, path, wavelengths, and shape. Separate keywords with spaces or commas.")
+        self.filter_help_label.setWordWrap(True)
+        self.filter_help_label.setStyleSheet("color: #9ca3af; font-size: 11px;")
+        self.dataset_kind_combo = QComboBox()
+        self.dataset_kind_combo.addItems(["All datasets", "Spectral only", "Non-spectral only", "Errors only"])
+        self.dataset_kind_combo.currentTextChanged.connect(self._apply_filter)
         self.gpu_checkbox = QCheckBox("GPU")
         self.gpu_checkbox.setChecked(gpu_available())
         self.gpu_checkbox.setEnabled(gpu_available())
         self.gpu_checkbox.stateChanged.connect(self._update_gpu_indicator)
         self.gpu_indicator = QLabel()
         self.gpu_indicator.setAlignment(Qt.AlignCenter)
+        self.gpu_indicator.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Fixed)
+        self.gpu_indicator.setMinimumWidth(88)
         self.zarr_gray_checkbox = QCheckBox("Visible sum")
         self.zarr_truecolor_checkbox = QCheckBox("Truecolor")
         self.zarr_truecolor_checkbox.setChecked(True)
@@ -210,6 +240,9 @@ class OmeZarrBrowserWidget(QWidget):
         )
         self.zarr_batch_table.toggle_rows_requested.connect(self._toggle_selected_zarr_rows)
         self.zarr_batch_table.itemSelectionChanged.connect(self._sync_selected_rows_to_zarr_checks)
+        self.zarr_batch_table.itemChanged.connect(self._handle_zarr_item_changed)
+        self.zarr_batch_table.itemDoubleClicked.connect(self._handle_zarr_item_double_clicked)
+        self.zarr_batch_table.open_requested.connect(self._open_selected_zarr_batch)
         self._configure_zarr_batch_table_palette()
         self._update_gpu_indicator()
         self.zarr_scan_box.pathDropped.connect(self._handle_zarr_scan_dropped)
@@ -246,18 +279,32 @@ class OmeZarrBrowserWidget(QWidget):
         browser_layout.addLayout(zarr_source_row)
 
         browser_layout.addWidget(scan_zarr_button)
-        browser_layout.addWidget(QLabel("Find"))
-        browser_layout.addWidget(self.filter_edit)
+        filter_row = QHBoxLayout()
+        filter_label = QLabel("Filter Datasets")
+        filter_label.setStyleSheet("color: #d1d5db; font-weight: 700;")
+        filter_row.addWidget(filter_label)
+        filter_row.addWidget(self.filter_edit, 1)
+        filter_row.addWidget(QLabel("Type"))
+        filter_row.addWidget(self.dataset_kind_combo)
+        browser_layout.addLayout(filter_row)
+        browser_layout.addWidget(self.filter_help_label)
 
-        zarr_options_row = QHBoxLayout()
-        zarr_options_row.addWidget(self.zarr_gray_checkbox)
-        zarr_options_row.addWidget(self.zarr_truecolor_checkbox)
-        zarr_options_row.addWidget(self.truecolor_auto_clean_checkbox)
-        zarr_options_row.addWidget(QLabel("Clean"))
-        zarr_options_row.addWidget(self.truecolor_clean_combo)
-        zarr_options_row.addWidget(self.zarr_raw_checkbox)
-        zarr_options_row.addWidget(self.zarr_preview_checkbox)
-        browser_layout.addLayout(zarr_options_row)
+        view_options_row = QHBoxLayout()
+        view_options_row.addWidget(self.zarr_gray_checkbox)
+        view_options_row.addWidget(self.zarr_raw_checkbox)
+        view_options_row.addWidget(self.zarr_preview_checkbox)
+        view_options_row.addStretch(1)
+        browser_layout.addLayout(view_options_row)
+
+        truecolor_group = QGroupBox("Truecolor")
+        truecolor_layout = QGridLayout()
+        truecolor_layout.addWidget(self.zarr_truecolor_checkbox, 0, 0)
+        truecolor_layout.addWidget(self.truecolor_auto_clean_checkbox, 0, 1)
+        truecolor_layout.addWidget(QLabel("Clean level"), 0, 2)
+        truecolor_layout.addWidget(self.truecolor_clean_combo, 0, 3)
+        truecolor_layout.setColumnStretch(4, 1)
+        truecolor_group.setLayout(truecolor_layout)
+        browser_layout.addWidget(truecolor_group)
 
         zarr_batch_actions = QHBoxLayout()
         zarr_batch_actions.addWidget(self.select_all_zarr_button)
@@ -295,11 +342,26 @@ class OmeZarrBrowserWidget(QWidget):
 
     def _update_gpu_indicator(self):
         enabled = self.gpu_checkbox.isChecked() and self.gpu_checkbox.isEnabled()
-        self.gpu_indicator.setText(get_gpu_status_text(enabled))
+        self.gpu_indicator.setText("GPU ON" if enabled else "GPU OFF")
         if enabled:
-            self.gpu_indicator.setStyleSheet("background-color: #1f7a1f; color: white; padding: 4px;")
+            self.gpu_indicator.setStyleSheet(
+                "background-color: #1f7a1f; color: white; padding: 4px 8px; border-radius: 6px; font-weight: 700;"
+            )
+            tooltip = "GPU rendering is enabled for truecolor loading."
         else:
-            self.gpu_indicator.setStyleSheet("background-color: #6f1d1b; color: white; padding: 4px;")
+            self.gpu_indicator.setStyleSheet(
+                "background-color: #6f1d1b; color: white; padding: 4px 8px; border-radius: 6px; font-weight: 700;"
+            )
+            tooltip = (
+                "GPU unavailable. CuPy is not installed or not working in this Python environment. "
+                "Install a compatible CuPy build for your CUDA version, or leave GPU off to use CPU rendering."
+            )
+            reason = gpu_unavailable_reason()
+            if reason and reason not in {"CuPy not installed", "GPU unavailable"}:
+                tooltip = f"{tooltip}\nReason: {reason}"
+        status_text = get_gpu_status_text(enabled)
+        self.gpu_checkbox.setToolTip(tooltip)
+        self.gpu_indicator.setToolTip(f"{status_text}\n{tooltip}")
 
     def _pick_zarr_batch_root(self):
         path = QFileDialog.getExistingDirectory(self, "Select folder containing OME-Zarr datasets")
@@ -432,29 +494,80 @@ class OmeZarrBrowserWidget(QWidget):
         item.setForeground(foreground_color or palette.color(QPalette.Text))
         item.setBackground(background_color or palette.color(QPalette.Base))
 
-    def _entry_matches_filter(self, entry: dict, query: str) -> bool:
-        if not query:
+    def _dataset_kind_matches(self, entry: dict) -> bool:
+        mode = self.dataset_kind_combo.currentText()
+        spectral_value = str(entry.get("spectral", "")).strip().lower()
+        if mode == "All datasets":
             return True
-        searchable_text = " ".join(str(entry.get(key, "")) for key in ("name", "relative_path", "path", "wavelengths", "shape", "preview_shape"))
-        return query in searchable_text.lower()
+        if mode == "Spectral only":
+            return spectral_value == "true"
+        if mode == "Non-spectral only":
+            return spectral_value == "false"
+        if mode == "Errors only":
+            return spectral_value == "error"
+        return True
+
+    def _tokenize_filter_query(self, query: str) -> list[str]:
+        return [token for token in re.split(r"[\s,]+", query.strip().lower()) if token]
+
+    def _tokenize_entry_text(self, entry: dict) -> set[str]:
+        searchable_text = " ".join(
+            str(entry.get(key, ""))
+            for key in ("name", "relative_path", "path", "wavelengths", "shape", "preview_shape", "axes", "spectral")
+        ).lower()
+        return {token for token in re.split(r"[^a-z0-9]+", searchable_text) if token}
+
+    def _entry_matches_filter(self, entry: dict, query_tokens: list[str]) -> bool:
+        if not self._dataset_kind_matches(entry):
+            return False
+        if not query_tokens:
+            return True
+        entry_tokens = self._tokenize_entry_text(entry)
+        return any(token in entry_tokens for token in query_tokens)
 
     def _visible_zarr_row_indices(self) -> list[int]:
         return [row for row in range(len(self._zarr_batch_entries)) if not self.zarr_batch_table.isRowHidden(row)]
 
     def _apply_filter(self):
-        query = self.filter_edit.text().strip().lower()
+        raw_query = self.filter_edit.text().strip()
+        query_tokens = self._tokenize_filter_query(raw_query)
         visible_count = 0
         for row_index, entry in enumerate(self._zarr_batch_entries):
-            is_match = self._entry_matches_filter(entry, query)
+            is_match = self._entry_matches_filter(entry, query_tokens)
             self.zarr_batch_table.setRowHidden(row_index, not is_match)
             if is_match:
                 visible_count += 1
         if not self._zarr_batch_entries:
             self._set_status("No Zarr datasets loaded into the browser table.")
-        elif query:
-            self._set_status(f"Matched {visible_count}/{len(self._zarr_batch_entries)} Zarr dataset(s) for '{self.filter_edit.text().strip()}'.")
+        elif raw_query:
+            self._set_status(
+                f"Matched {visible_count}/{len(self._zarr_batch_entries)} Zarr dataset(s) for whole-word filter '{raw_query}'."
+            )
+        elif self.dataset_kind_combo.currentText() != "All datasets":
+            self._set_status(
+                f"Showing {visible_count}/{len(self._zarr_batch_entries)} Zarr dataset(s) for {self.dataset_kind_combo.currentText().lower()}."
+            )
         else:
             self._set_status(f"Found {len(self._zarr_batch_entries)} Zarr dataset(s).")
+
+    def _handle_zarr_item_changed(self, item: QTableWidgetItem):
+        if self._updating_zarr_table or item.column() != 0:
+            return
+        row_index = item.data(Qt.UserRole)
+        if row_index is None or row_index >= len(self._zarr_batch_entries):
+            return
+        self._zarr_batch_entries[row_index]["open"] = item.checkState() == Qt.Checked
+
+    def _handle_zarr_item_double_clicked(self, item: QTableWidgetItem):
+        row_index = item.row()
+        if row_index < 0 or row_index >= len(self._zarr_batch_entries) or self.zarr_batch_table.isRowHidden(row_index):
+            return
+        self.zarr_batch_table.selectRow(row_index)
+        self._zarr_batch_entries[row_index]["open"] = True
+        open_item = self.zarr_batch_table.item(row_index, 0)
+        if open_item is not None:
+            open_item.setCheckState(Qt.Checked)
+        self._open_entries([self._zarr_batch_entries[row_index]])
 
     def _selected_table_rows(self) -> list[int]:
         selection_model = self.zarr_batch_table.selectionModel()
@@ -511,6 +624,10 @@ class OmeZarrBrowserWidget(QWidget):
             entry["open"] = is_checked
             if is_checked:
                 selected_entries.append(entry)
+        self._open_entries(selected_entries)
+
+    def _open_entries(self, entries: list[dict]):
+        selected_entries = list(entries)
         if not selected_entries:
             self._set_status("Select at least one visible Zarr dataset in the browser table.")
             return

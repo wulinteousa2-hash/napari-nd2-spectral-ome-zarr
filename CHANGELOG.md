@@ -1,5 +1,17 @@
 # Changelog
 
+## 1.5.1 - 2026-04-24
+
+### OME-Zarr Browser
+
+- Changed dataset filtering to whole-word matching instead of loose substring matching.
+- Added multi-keyword filtering using spaces or commas so browser searches work better for names, folders, wavelengths, and shapes.
+- Added dataset-type filtering for `All datasets`, `Spectral only`, `Non-spectral only`, and `Errors only`.
+- Added double-click row opening for faster single-dataset loading.
+- Added `Enter` / `Return` keyboard opening for checked datasets in the browser table.
+- Reorganized the browser controls so `Truecolor`, `Clean bg`, and cleanup strength stay grouped together in a dedicated `Truecolor` section.
+- Added inline filter help text to make the browser search behavior clearer.
+
 ## 1.5.0 - 2026-04-23
 
 ### OME-Zarr Browser
