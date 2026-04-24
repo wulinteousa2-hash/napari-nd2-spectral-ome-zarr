@@ -4,6 +4,7 @@ import csv
 import json
 import os
 from concurrent.futures import ProcessPoolExecutor
+from functools import lru_cache
 from importlib import resources
 from importlib.util import find_spec
 
@@ -36,6 +37,35 @@ def _load_cie_csv():
 _CIE_WAVELENGTHS, _CIE_X, _CIE_Y, _CIE_Z = _load_cie_csv()
 
 
+def _summarize_gpu_probe_error(exc: Exception) -> str:
+    cause = getattr(exc, "__cause__", None)
+    if cause is not None:
+        cause_text = str(cause).strip()
+        if cause_text:
+            return cause_text.splitlines()[0]
+    message = str(exc).strip()
+    for line in message.splitlines():
+        line = line.strip()
+        if line and not set(line) <= {"="}:
+            return line
+    return exc.__class__.__name__
+
+
+@lru_cache(maxsize=1)
+def _gpu_runtime_probe() -> tuple[bool, str | None]:
+    if find_spec("cupy") is None:
+        return False, "CuPy not installed"
+    try:
+        import cupy as cp
+
+        device_count = int(cp.cuda.runtime.getDeviceCount())
+    except Exception as exc:
+        return False, _summarize_gpu_probe_error(exc)
+    if device_count < 1:
+        return False, "No CUDA devices detected"
+    return True, None
+
+
 def approximate_cie_xyz(wavelengths_nm: np.ndarray) -> np.ndarray:
     wavelengths_nm = np.asarray(wavelengths_nm, dtype=np.float32)
     x_bar = np.interp(wavelengths_nm, _CIE_WAVELENGTHS, _CIE_X)
@@ -45,12 +75,18 @@ def approximate_cie_xyz(wavelengths_nm: np.ndarray) -> np.ndarray:
 
 
 def gpu_available() -> bool:
-    return find_spec("cupy") is not None
+    available, _error = _gpu_runtime_probe()
+    return available
+
+
+def gpu_unavailable_reason() -> str:
+    _available, error = _gpu_runtime_probe()
+    return error or "GPU unavailable"
 
 
 def get_gpu_status_text(use_gpu: bool) -> str:
     if not gpu_available():
-        return "GPU: OFF (CuPy not installed)"
+        return f"GPU: OFF ({gpu_unavailable_reason()})"
     return "GPU: ON" if use_gpu else "GPU: OFF"
 
 
